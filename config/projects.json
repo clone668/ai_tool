@@ -1,0 +1,243 @@
+{
+  "host": {
+    "id": "huxi-h81m",
+    "name": "huxi-H81M",
+    "address": "192.168.2.240",
+    "location": "局域网 / Ubuntu 24.04"
+  },
+  "projects": [
+    {
+      "id": "editor-3d",
+      "name": "3D Editor",
+      "description": "Next.js 三维编辑器",
+      "kind": "application",
+      "runtime": "systemd / Node.js",
+      "path": "/data/3d",
+      "url": "http://192.168.2.240:3002",
+      "components": [
+        {
+          "id": "editor",
+          "label": "editor-3d.service",
+          "type": "systemd",
+          "service": "editor-3d.service",
+          "actions": ["start", "restart", "stop"]
+        }
+      ],
+      "checks": [
+        {"id": "editor-http", "label": "HTTP :3002", "type": "http", "url": "http://127.0.0.1:3002"}
+      ]
+    },
+    {
+      "id": "hermes-gateway",
+      "name": "Hermes Gateway",
+      "description": "Hermes Python gateway",
+      "kind": "application",
+      "runtime": "systemd / Python",
+      "path": "/data/hermes-agent",
+      "components": [
+        {
+          "id": "gateway",
+          "label": "hermes-gateway.service",
+          "type": "systemd",
+          "service": "hermes-gateway.service",
+          "actions": ["start", "restart", "stop"]
+        }
+      ],
+      "checks": []
+    },
+    {
+      "id": "smsi-trading",
+      "name": "SMSI Trading",
+      "description": "Gunicorn 交易服务",
+      "kind": "application",
+      "runtime": "systemd / Python",
+      "path": "/data/Trading",
+      "url": "http://192.168.2.240:18099",
+      "components": [
+        {
+          "id": "trading",
+          "label": "smsi-trading.service",
+          "type": "systemd",
+          "service": "smsi-trading.service",
+          "actions": ["start", "restart", "stop"]
+        }
+      ],
+      "checks": [
+        {"id": "trading-port", "label": "TCP :18099", "type": "tcp", "host": "192.168.2.240", "port": 18099}
+      ]
+    },
+    {
+      "id": "smsi-archive",
+      "name": "SMSI Archive Client",
+      "description": "归档客户端及自动更新服务",
+      "kind": "application",
+      "runtime": "systemd / Python",
+      "path": "/data/smsi-archive-client",
+      "url": "http://192.168.2.240:8788",
+      "components": [
+        {
+          "id": "client",
+          "label": "smsi-archive-client.service",
+          "type": "systemd",
+          "service": "smsi-archive-client.service",
+          "actions": ["start", "restart", "stop"]
+        },
+        {
+          "id": "updater",
+          "label": "smsi-archive-client-updater.service",
+          "type": "systemd",
+          "service": "smsi-archive-client-updater.service",
+          "required": false,
+          "actions": ["start", "restart", "stop"]
+        }
+      ],
+      "checks": [
+        {"id": "archive-http", "label": "HTTP :8788", "type": "http", "url": "http://127.0.0.1:8788"}
+      ]
+    },
+    {
+      "id": "openclaw",
+      "name": "OpenClaw Gateway",
+      "description": "huxi 用户级 systemd 网关",
+      "kind": "application",
+      "runtime": "user systemd / Node.js",
+      "path": "/home/huxi/.config/systemd/user",
+      "url": "http://home.entroscav.com",
+      "components": [
+        {
+          "id": "gateway",
+          "label": "openclaw-gateway.service (huxi)",
+          "type": "user_systemd",
+          "user": "huxi",
+          "service": "openclaw-gateway.service",
+          "actions": ["start", "restart", "stop"]
+        }
+      ],
+      "checks": [
+        {"id": "openclaw-http", "label": "HTTP :18789", "type": "http", "url": "http://127.0.0.1:18789"}
+      ]
+    },
+    {
+      "id": "new-api",
+      "name": "New API",
+      "description": "API 服务、MySQL 与 Redis",
+      "kind": "application",
+      "runtime": "Docker Compose",
+      "path": "/data",
+      "url": "http://192.168.2.240:3000",
+      "components": [
+        {
+          "id": "stack",
+          "label": "new-api stack",
+          "type": "compose",
+          "compose_file": "/data/docker-compose.yml",
+          "containers": ["new-api", "new-api-mysql", "new-api-redis"],
+          "actions": ["start", "restart", "stop"]
+        }
+      ],
+      "checks": [
+        {"id": "new-api-http", "label": "HTTP :3000", "type": "http", "url": "http://127.0.0.1:3000"}
+      ]
+    },
+    {
+      "id": "cliproxy",
+      "name": "CLI Proxy",
+      "description": "CLI Proxy API 与管理界面",
+      "kind": "application",
+      "runtime": "Docker Compose",
+      "path": "/data/cliproxy",
+      "url": "http://192.168.2.240:8318",
+      "components": [
+        {
+          "id": "stack",
+          "label": "cliproxy stack",
+          "type": "compose",
+          "compose_file": "/data/cliproxy/docker-compose.yml",
+          "containers": ["cliproxy", "cliproxy-ui"],
+          "actions": ["start", "restart", "stop"]
+        }
+      ],
+      "checks": [
+        {"id": "cliproxy-api", "label": "TCP :8317", "type": "tcp", "host": "127.0.0.1", "port": 8317},
+        {"id": "cliproxy-ui", "label": "HTTP :8318", "type": "http", "url": "http://127.0.0.1:8318"}
+      ]
+    },
+    {
+      "id": "sub2api",
+      "name": "Sub2API",
+      "description": "Sub2API、PostgreSQL 与 Redis",
+      "kind": "application",
+      "runtime": "Docker Compose",
+      "path": "/data/sub2api/deploy",
+      "url": "http://192.168.2.240:8080",
+      "components": [
+        {
+          "id": "stack",
+          "label": "sub2api stack",
+          "type": "compose",
+          "compose_file": "/data/sub2api/deploy/docker-compose.yml",
+          "containers": ["sub2api", "sub2api-postgres", "sub2api-redis"],
+          "actions": ["start", "restart", "stop"]
+        }
+      ],
+      "checks": [
+        {"id": "sub2api-http", "label": "HTTP :8080", "type": "http", "url": "http://127.0.0.1:8080"}
+      ]
+    },
+    {
+      "id": "jx2",
+      "name": "JX2 Web",
+      "description": "Nginx、PHP-FPM 与 MySQL 站点",
+      "kind": "application",
+      "runtime": "Nginx / PHP 7.4",
+      "path": "/home/huxi/web",
+      "url": "http://192.168.2.240",
+      "components": [
+        {"id": "nginx", "label": "nginx.service", "type": "systemd", "service": "nginx.service", "actions": []},
+        {"id": "php", "label": "php7.4-fpm.service", "type": "systemd", "service": "php7.4-fpm.service", "actions": []},
+        {"id": "mysql", "label": "mysql.service", "type": "systemd", "service": "mysql.service", "actions": []}
+      ],
+      "checks": [
+        {"id": "jx2-http", "label": "HTTP :80", "type": "http", "url": "http://127.0.0.1", "headers": {"Host": "192.168.2.240"}}
+      ]
+    },
+    {
+      "id": "platform-services",
+      "name": "基础服务",
+      "description": "主机入口与基础运行环境",
+      "kind": "infrastructure",
+      "runtime": "systemd",
+      "components": [
+        {"id": "docker", "label": "docker.service", "type": "systemd", "service": "docker.service", "actions": []},
+        {"id": "ssh", "label": "ssh.service", "type": "systemd", "service": "ssh.service", "actions": []},
+        {"id": "cron", "label": "cron.service", "type": "systemd", "service": "cron.service", "actions": []},
+        {"id": "smbd", "label": "smbd.service", "type": "systemd", "service": "smbd.service", "actions": []},
+        {"id": "nmbd", "label": "nmbd.service", "type": "systemd", "service": "nmbd.service", "actions": []}
+      ],
+      "checks": [
+        {"id": "ssh-port", "label": "SSH :22", "type": "tcp", "host": "127.0.0.1", "port": 22},
+        {"id": "mysql-port", "label": "MySQL :3306", "type": "tcp", "host": "127.0.0.1", "port": 3306}
+      ]
+    },
+    {
+      "id": "game-log-check",
+      "name": "游戏日志检查",
+      "description": "每天 09:15 执行的 root cron 任务",
+      "kind": "scheduled",
+      "runtime": "cron",
+      "path": "/data/openclaw/workspace/scripts/check-game-logs.sh",
+      "components": [
+        {
+          "id": "cron-job",
+          "label": "15 9 * * * check-game-logs.sh",
+          "type": "cron",
+          "schedule": "15 9 * * *",
+          "command": "/data/openclaw/workspace/scripts/check-game-logs.sh",
+          "log_path": "/data/openclaw/workspace/logs/game-log-check.log",
+          "actions": []
+        }
+      ],
+      "checks": []
+    }
+  ]
+}

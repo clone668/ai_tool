@@ -1,0 +1,2 @@
+Defaults:ai-tool !requiretty
+ai-tool ALL=(root) NOPASSWD: /usr/local/libexec/ai-tool-ops *

@@ -1,0 +1,41 @@
+[Unit]
+Description=AI Tool Ubuntu operations console
+Documentation=https://github.com/clone668/ai_tool
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=simple
+User=ai-tool
+Group=ai-tool
+WorkingDirectory=/data/ai-tool
+EnvironmentFile=/etc/ai-tool/ai-tool.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/data/ai-tool/.venv/bin/uvicorn app.main:app --app-dir /data/ai-tool/backend --host 0.0.0.0 --port 19090 --workers 1 --no-proxy-headers
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=45
+TimeoutStopSec=20
+UMask=0077
+
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+LockPersonality=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/data/ai-tool /etc/ai-tool
+ReadWritePaths=/data/ai-tool-data
+
+[Install]
+WantedBy=multi-user.target

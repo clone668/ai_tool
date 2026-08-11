@@ -1,0 +1,16 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.db
+*.db-shm
+*.db-wal
+node_modules/
+frontend/dist/
+frontend/.vite/
+coverage/
+*.log
