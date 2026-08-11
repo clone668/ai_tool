@@ -219,6 +219,12 @@ export default function App() {
               )}
               {activeView === 'audit' && <AuditView onError={handleViewError} />}
             </>
+          ) : refreshing ? (
+            <div className="load-failure dashboard-loading" role="status">
+              <LoaderCircle className="spin" size={28} />
+              <strong>正在读取节点状态</strong>
+              <span>正在汇总服务、容器与健康检查</span>
+            </div>
           ) : (
             <div className="load-failure">
               <AlertTriangle size={28} />

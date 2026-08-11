@@ -971,6 +971,7 @@ pre:focus-visible {
 .empty-state span,
 .load-failure span { font-size: 11px; }
 .load-failure svg { color: var(--amber); }
+.dashboard-loading svg { color: var(--accent); }
 .load-failure .secondary-button { margin-top: 8px; }
 
 /* Logs */
