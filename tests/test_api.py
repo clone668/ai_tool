@@ -32,7 +32,7 @@ def test_authentication_and_dashboard(demo_settings) -> None:
         assert dashboard.status_code == 200
         payload = dashboard.json()
         assert payload["host"]["hostname"] == "huxi-H81M"
-        assert payload["summary"]["total"] == 9
+        assert payload["summary"]["total"] == 11
 
 
 def test_csrf_actions_and_audit(demo_settings) -> None:

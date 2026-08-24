@@ -202,6 +202,48 @@
       ]
     },
     {
+      "id": "open-webui",
+      "name": "Open WebUI",
+      "description": "自托管 AI 对话与模型管理界面",
+      "kind": "application",
+      "runtime": "Docker Compose",
+      "path": "/data/open-webui",
+      "url": "http://192.168.2.240:3003",
+      "components": [
+        {
+          "id": "stack",
+          "label": "open-webui.service",
+          "type": "systemd",
+          "service": "open-webui.service",
+          "actions": ["start", "restart", "stop"]
+        }
+      ],
+      "checks": [
+        {"id": "open-webui-http", "label": "HTTP :3003", "type": "http", "url": "http://127.0.0.1:3003"}
+      ]
+    },
+    {
+      "id": "lobehub",
+      "name": "LobeHub",
+      "description": "LobeHub、PostgreSQL、Redis、RustFS 与 SearXNG",
+      "kind": "application",
+      "runtime": "Docker Compose",
+      "path": "/data/lobehub",
+      "url": "http://192.168.2.240:3210",
+      "components": [
+        {
+          "id": "stack",
+          "label": "lobehub.service",
+          "type": "systemd",
+          "service": "lobehub.service",
+          "actions": ["start", "restart", "stop"]
+        }
+      ],
+      "checks": [
+        {"id": "lobehub-http", "label": "HTTP :3210", "type": "http", "url": "http://127.0.0.1:3210"}
+      ]
+    },
+    {
       "id": "platform-services",
       "name": "基础服务",
       "description": "主机入口与基础运行环境",

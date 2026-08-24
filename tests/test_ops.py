@@ -10,8 +10,8 @@ def test_demo_snapshot_matches_managed_projects(demo_settings) -> None:
     snapshot = client.snapshot()
 
     assert snapshot["host"]["address"] == "192.168.2.240"
-    assert snapshot["summary"]["total"] == 9
-    assert len(snapshot["projects"]) == 11
+    assert snapshot["summary"]["total"] == 11
+    assert len(snapshot["projects"]) == 13
 
 
 def test_backend_rejects_disallowed_component_action(demo_settings) -> None:

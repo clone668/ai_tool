@@ -13,7 +13,7 @@ def test_production_configuration_is_valid() -> None:
     config = load_config(CONFIG_PATH)
 
     assert config["host"]["address"] == "192.168.2.240"
-    assert len(config["projects"]) == 11
+    assert len(config["projects"]) == 13
     openclaw = next(project for project in config["projects"] if project["id"] == "openclaw")
     assert openclaw["components"][0]["type"] == "user_systemd"
     assert openclaw["components"][0]["user"] == "huxi"
