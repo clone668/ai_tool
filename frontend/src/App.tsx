@@ -35,7 +35,7 @@ const viewTitles: Record<ViewName, { title: string; subtitle: string }> = {
   startup: { title: '开机启动', subtitle: 'systemd 与 Docker 重启策略' },
   system: { title: '系统监控', subtitle: '资源、磁盘、进程与网络' },
   maintenance: { title: '系统维护', subtitle: '清理扫描与可回滚优化' },
-  web: { title: 'Web 服务', subtitle: 'Nginx 入口、上游与访问日志' },
+  web: { title: 'Web 服务', subtitle: '自动发现、Nginx 入口与访问日志' },
   terminal: { title: '命令终端', subtitle: '隔离的低权限会话' },
   logs: { title: '日志中心', subtitle: 'systemd journal 与容器日志' },
   audit: { title: '操作审计', subtitle: '登录与运维动作记录' },

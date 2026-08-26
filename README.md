@@ -9,7 +9,8 @@
 - APT/Snap 软件查询、安装、升级和带预览的卸载
 - systemd、用户级 systemd 与 Docker 重启策略管理
 - 分风险垃圾扫描、固定白名单清理与可回滚系统优化
-- 托管 Nginx 反向代理入口及访问/错误日志
+- 自动发现 Nginx、Docker、systemd 与本机进程提供的 Web 服务
+- 托管 Nginx 反向代理入口及访问/错误日志，外部配置保持只读
 - 以隔离的 `ai-tool-shell` 低权限账户运行的单会话浏览器终端
 - 按项目聚合 systemd、用户级 systemd 和 Docker Compose 组件
 - TCP 与 HTTP 健康检查

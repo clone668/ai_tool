@@ -10,6 +10,8 @@ Only one authenticated browser terminal session can be active at a time. Termina
 
 Package removal blocks essential system packages. Service controls protect SSH, Docker, and AI Tool itself. Cleanup actions are fixed allowlisted operations; `/data` and Docker volumes are never removed automatically. Managed Nginx upstreams are limited to `127.0.0.1` and `localhost`.
 
+Web discovery is read-only. It inspects active Nginx configuration, Docker-published TCP ports, and local listeners, then performs bounded HTTP probes. Existing Nginx files remain externally owned and cannot be edited or deleted through the discovery view. Only an explicit administrator action can create a new configuration under the AI Tool-owned Nginx directories.
+
 Software removal, cleanup, and optimization endpoints require a short-lived single-use confirmation token issued with the corresponding preview. Replayed, expired, or mismatched confirmations are rejected and audited.
 
 ## Credentials

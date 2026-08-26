@@ -19,10 +19,12 @@ import re
 import shutil
 import signal
 import socket
+import ssl
 import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from contextlib import suppress
 from datetime import datetime, timezone
@@ -44,6 +46,7 @@ NGINX = "/usr/sbin/nginx"
 PS = "/usr/bin/ps"
 LSBLK = "/usr/bin/lsblk"
 DF = "/usr/bin/df"
+SS = "/usr/bin/ss"
 WEB_STATE_PATH = Path("/etc/ai-tool/web-services.json")
 WEB_BACKUP_DIR = Path("/etc/ai-tool/backups/web")
 WEB_AVAILABLE_DIR = Path("/etc/nginx/ai-tool-sites-available")
@@ -51,6 +54,21 @@ WEB_ENABLED_DIR = Path("/etc/nginx/ai-tool-sites-enabled")
 WEB_INCLUDE_PATH = Path("/etc/nginx/conf.d/ai-tool-managed.conf")
 TERMINAL_USER = "ai-tool-shell"
 TERMINAL_CLEANUP_GRACE_SECONDS = 1.0
+NON_WEB_PORTS = {
+    22,
+    53,
+    111,
+    139,
+    445,
+    631,
+    2049,
+    3306,
+    33060,
+    5432,
+    6379,
+}
+INTERNAL_WEB_PROCESSES = {"containerd"}
+SERVICE_DISPLAY_NAMES = {"ai-tool.service": "AI Tool"}
 PACKAGE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9+.-]{0,127}(?::[a-z0-9-]+)?$")
 UNIT_PATTERN = re.compile(r"^[A-Za-z0-9@_.:-]+\.(?:service|timer|socket|path)$")
 CONTAINER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -1289,7 +1307,14 @@ def _load_web_state() -> list[dict[str, Any]]:
         value = json.loads(WEB_STATE_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise OpsFailure("managed web service state is invalid") from exc
-    return value if isinstance(value, list) else []
+    if not isinstance(value, list):
+        raise OpsFailure("managed web service state is invalid")
+    if any(not isinstance(item, dict) for item in value):
+        raise OpsFailure("managed web service state is invalid")
+    try:
+        return [_validate_web_service(item) for item in value]
+    except OpsFailure as exc:
+        raise OpsFailure("managed web service state is invalid") from exc
 
 
 def _save_web_state(items: list[dict[str, Any]]) -> None:
@@ -1377,16 +1402,399 @@ def _nginx_apply() -> None:
         raise OpsFailure(message or "nginx reload failed")
 
 
-def web_inventory() -> dict[str, Any]:
-    items = _load_web_state()
-    nginx = run([NGINX, "-T"], timeout=30)
+def _web_id(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return (normalized or "web-service")[:63].rstrip("-")
+
+
+def _url_port(value: str) -> int | None:
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return None
+        return parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError:
+        return None
+
+
+def _project_web_ports(config: dict[str, Any]) -> dict[int, list[dict[str, str]]]:
+    by_port: dict[int, list[dict[str, str]]] = {}
+    for project in config.get("projects", []):
+        candidates = []
+        if isinstance(project.get("url"), str):
+            candidates.append(project["url"])
+        candidates.extend(
+            check["url"]
+            for check in project.get("checks", [])
+            if check.get("type") == "http" and isinstance(check.get("url"), str)
+        )
+        for url in candidates:
+            port = _url_port(url)
+            if port is None:
+                continue
+            item = {
+                "id": str(project.get("id", "web-service")),
+                "name": str(project.get("name", "Web service")),
+            }
+            entries = by_port.setdefault(port, [])
+            if not any(existing["id"] == item["id"] for existing in entries):
+                entries.append(item)
+    return by_port
+
+
+def _docker_published_ports() -> dict[int, list[str]]:
+    listed = run([DOCKER, "ps", "--format", "{{.ID}}"], timeout=30)
+    container_ids = [line.strip() for line in listed.stdout.splitlines() if line.strip()]
+    if listed.returncode != 0:
+        raise OpsFailure("Docker container inventory is unavailable")
+    if not container_ids:
+        return {}
+    inspected = run([DOCKER, "inspect", *container_ids], timeout=40)
+    if inspected.returncode != 0:
+        raise OpsFailure("Docker port inventory is unavailable")
+    try:
+        containers = json.loads(inspected.stdout)
+    except json.JSONDecodeError as exc:
+        raise OpsFailure("Docker port inventory is invalid") from exc
+    if not isinstance(containers, list):
+        raise OpsFailure("Docker port inventory is invalid")
+    published: dict[int, set[str]] = {}
+    for container in containers:
+        if not isinstance(container, dict):
+            continue
+        name = str(container.get("Name", "")).lstrip("/")
+        ports = container.get("NetworkSettings", {}).get("Ports", {}) or {}
+        if not isinstance(ports, dict):
+            continue
+        for container_port, bindings in ports.items():
+            if not container_port.endswith("/tcp") or not isinstance(bindings, list):
+                continue
+            for binding in bindings:
+                try:
+                    host_port = int(binding.get("HostPort", ""))
+                except (TypeError, ValueError):
+                    continue
+                published.setdefault(host_port, set()).add(name)
+    return {port: sorted(containers) for port, containers in published.items()}
+
+
+def _listener_endpoint(value: str) -> tuple[str, int] | None:
+    if value.startswith("[") and "]:" in value:
+        host, port_value = value[1:].rsplit("]:", 1)
+    else:
+        host, separator, port_value = value.rpartition(":")
+        if not separator:
+            return None
+    try:
+        return host.split("%", 1)[0], int(port_value)
+    except ValueError:
+        return None
+
+
+def _service_for_pid(pid: int | None) -> str | None:
+    if not pid:
+        return None
+    try:
+        cgroup = Path(f"/proc/{pid}/cgroup").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    matches = re.findall(r"(?:^|/)([^/]+\.service)(?:/|$)", cgroup, re.MULTILINE)
+    return matches[-1] if matches else None
+
+
+def _tcp_listeners() -> dict[int, dict[str, Any]]:
+    result = run([SS, "-lntpH"], timeout=30)
+    if result.returncode != 0:
+        raise OpsFailure("TCP listener inventory is unavailable")
+    listeners: dict[int, dict[str, Any]] = {}
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if len(fields) < 4:
+            continue
+        endpoint = _listener_endpoint(fields[3])
+        if endpoint is None:
+            continue
+        host, port = endpoint
+        process_match = re.search(r'users:\(\("([^"]+)"', line)
+        pid_match = re.search(r"\bpid=(\d+)", line)
+        pid = int(pid_match.group(1)) if pid_match else None
+        candidate = {
+            "bind": host,
+            "port": port,
+            "process": process_match.group(1) if process_match else "unknown",
+            "pid": pid,
+            "service": _service_for_pid(pid),
+        }
+        current = listeners.get(port)
+        priority = 3 if host == "0.0.0.0" else (2 if ":" not in host else 1)
+        current_priority = 0
+        if current:
+            current_host = current["bind"]
+            current_priority = (
+                3 if current_host == "0.0.0.0" else (2 if ":" not in current_host else 1)
+            )
+        if not current or priority > current_priority:
+            listeners[port] = candidate
+    return listeners
+
+
+def _http_probe(
+    host: str,
+    port: int,
+    host_header: str | None = None,
+    protocol: str = "http",
+) -> dict[str, Any]:
+    url_host = f"[{host}]" if ":" in host else host
+    request = urllib.request.Request(
+        f"{protocol}://{url_host}:{port}/",
+        headers={
+            "User-Agent": "ai-tool-discovery/1.0",
+            **({"Host": host_header} if host_header else {}),
+        },
+    )
+    handlers: list[urllib.request.BaseHandler] = [urllib.request.ProxyHandler({})]
+    if protocol == "https":
+        tls_context = ssl.create_default_context()
+        tls_context.check_hostname = False
+        tls_context.verify_mode = ssl.CERT_NONE
+        handlers.append(urllib.request.HTTPSHandler(context=tls_context))
+    opener = urllib.request.build_opener(*handlers)
+    try:
+        with opener.open(request, timeout=1) as response:
+            status_code = response.status
+    except urllib.error.HTTPError as exc:
+        status_code = exc.code
+    except (OSError, urllib.error.URLError):
+        return {"detected": False, "healthy": False, "status_code": None}
+    return {
+        "detected": True,
+        "healthy": status_code < http.client.INTERNAL_SERVER_ERROR,
+        "status_code": status_code,
+    }
+
+
+def _nginx_server_blocks(output: str) -> list[dict[str, Any]]:
+    blocks: list[dict[str, Any]] = []
+    source = "unknown"
+    block_lines: list[str] = []
+    block_source = source
+    depth = 0
+    for line in output.splitlines():
+        source_match = re.match(r"^# configuration file (.+):$", line)
+        if source_match and depth == 0:
+            source = source_match.group(1)
+            continue
+        if depth == 0 and re.match(r"^\s*server\s*\{", line):
+            block_source = source
+            block_lines = [line]
+            depth = line.count("{") - line.count("}")
+            if depth == 0:
+                blocks.append({"source": block_source, "content": line})
+                block_lines = []
+            continue
+        if depth > 0:
+            block_lines.append(line)
+            depth += line.count("{") - line.count("}")
+            if depth == 0:
+                blocks.append({"source": block_source, "content": "\n".join(block_lines)})
+                block_lines = []
+    return blocks
+
+
+def _nginx_listen_port(content: str) -> tuple[int, str]:
+    for match in re.finditer(r"^\s*listen\s+([^;]+);", content, re.MULTILINE):
+        directive = match.group(1)
+        endpoint = directive.split()[0]
+        if endpoint.isdigit():
+            return int(endpoint), "https" if "ssl" in directive.split() else "http"
+        port_match = re.search(r":(\d+)$", endpoint)
+        if port_match:
+            return int(port_match.group(1)), "https" if "ssl" in directive.split() else "http"
+    return 80, "http"
+
+
+def _nginx_upstream(content: str) -> tuple[str | None, int | None]:
+    match = re.search(r"^\s*proxy_pass\s+(https?://[^;]+);", content, re.MULTILINE)
+    if not match:
+        return None, None
+    try:
+        parsed = urllib.parse.urlsplit(match.group(1))
+        return parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError:
+        return None, None
+
+
+def _discover_nginx(
+    output: str,
+    config: dict[str, Any],
+    managed_items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    host_address = str(config.get("host", {}).get("address", "127.0.0.1"))
+    project_ports = _project_web_ports(config)
+    managed_domains = {item["domain"] for item in managed_items}
+    discovered: list[dict[str, Any]] = []
+    seen: set[tuple[str, int, str]] = set()
+    for block in _nginx_server_blocks(output):
+        content = block["content"]
+        names = []
+        for match in re.finditer(r"^\s*server_name\s+([^;]+);", content, re.MULTILINE):
+            names.extend(match.group(1).split())
+        if not names:
+            names = ["_"]
+        port, protocol = _nginx_listen_port(content)
+        upstream_host, upstream_port = _nginx_upstream(content)
+        local_upstream = upstream_host in {"127.0.0.1", "localhost", "::1"}
+        probe_host = upstream_host if local_upstream else "127.0.0.1"
+        probe_port = upstream_port if local_upstream and upstream_port else port
+        probe_protocol = "http" if local_upstream else protocol
+        known = project_ports.get(upstream_port or port, [])
+        known_name = known[0]["name"] if len(known) == 1 else None
+        for domain in names:
+            key = (domain, port, block["source"])
+            if key in seen:
+                continue
+            seen.add(key)
+            host_header = None if domain == "_" else domain
+            probe = _http_probe(probe_host, probe_port, host_header, probe_protocol)
+            managed = domain in managed_domains
+            display_domain = None if domain == "_" else domain
+            access_host = display_domain or host_address
+            default_port = 443 if protocol == "https" else 80
+            port_suffix = "" if port == default_port else f":{port}"
+            discovered.append(
+                {
+                    "id": _web_id(f"nginx-{display_domain or 'default'}-{port}"),
+                    "name": known_name or (display_domain or "Nginx 默认站点"),
+                    "url": f"{protocol}://{access_host}{port_suffix}",
+                    "domain": display_domain,
+                    "port": port,
+                    "protocol": protocol,
+                    "source": "nginx",
+                    "source_detail": block["source"],
+                    "exposure": "lan",
+                    "healthy": probe["healthy"],
+                    "status_code": probe["status_code"],
+                    "managed": managed,
+                    "suggested_service": None,
+                    "upstream_host": upstream_host,
+                    "upstream_port": upstream_port,
+                }
+            )
+    return discovered
+
+
+def _discover_direct_services(
+    config: dict[str, Any],
+    listeners: dict[int, dict[str, Any]],
+    docker_ports: dict[int, list[str]],
+    managed_items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    host_address = str(config.get("host", {}).get("address", "127.0.0.1"))
+    project_ports = _project_web_ports(config)
+    managed_ports = {item["upstream_port"] for item in managed_items}
+    managed_ids = {item["id"] for item in managed_items}
     discovered = []
-    for match in re.finditer(
-        r"^\s*server_name\s+([^;]+);",
-        nginx.stdout + nginx.stderr,
-        re.MULTILINE,
-    ):
-        discovered.extend(name for name in match.group(1).split() if name not in {"_"})
+    for port, listener in sorted(listeners.items()):
+        if (
+            port in NON_WEB_PORTS
+            or listener["process"] == "nginx"
+            or listener["process"] in INTERNAL_WEB_PROCESSES
+        ):
+            continue
+        bind = listener["bind"]
+        loopback = bind == "localhost" or bind.startswith("127.") or bind in {"::1", "[::1]"}
+        probe_host = "127.0.0.1" if bind in {"0.0.0.0", "*", "::"} else bind
+        probe = _http_probe(probe_host, port)
+        known = project_ports.get(port, [])
+        docker = docker_ports.get(port)
+        if not probe["detected"] and not known:
+            continue
+        service = listener.get("service")
+        if len(known) == 1:
+            name = known[0]["name"]
+            base_id = known[0]["id"]
+        elif docker:
+            name = docker[0]
+            base_id = name
+        elif service:
+            name = SERVICE_DISPLAY_NAMES.get(service, service.removesuffix(".service"))
+            base_id = name
+        else:
+            name = f"{listener['process']} :{port}"
+            base_id = f"{listener['process']}-{port}"
+        if docker:
+            source = "docker"
+            source_detail = ", ".join(docker)
+        elif service:
+            source = "systemd"
+            source_detail = service
+        elif known:
+            source = "project"
+            source_detail = known[0]["id"]
+        else:
+            source = "process"
+            source_detail = f"{listener['process']} (PID {listener['pid'] or '-'})"
+        public_host = "127.0.0.1" if loopback else host_address
+        url_host = f"[{public_host}]" if ":" in public_host else public_host
+        managed = port in managed_ports
+        can_proxy = bind in {"0.0.0.0", "*", "::", "localhost", "127.0.0.1", "::1"}
+        suggested_id = _web_id(base_id)
+        if suggested_id in managed_ids:
+            suggested_id = _web_id(f"{suggested_id}-{port}")
+        suggestion = None
+        if can_proxy and not managed:
+            suggestion = {
+                "id": suggested_id,
+                "name": name,
+                "domain": "",
+                "upstream_host": "127.0.0.1",
+                "upstream_port": port,
+                "websocket": True,
+                "enabled": True,
+            }
+        discovered.append(
+            {
+                "id": _web_id(f"direct-{base_id}-{port}"),
+                "name": name,
+                "url": f"http://{url_host}:{port}",
+                "domain": None,
+                "port": port,
+                "protocol": "http",
+                "source": source,
+                "source_detail": source_detail,
+                "exposure": "loopback" if loopback else "lan",
+                "healthy": probe["healthy"],
+                "status_code": probe["status_code"],
+                "managed": managed,
+                "suggested_service": suggestion,
+                "upstream_host": "127.0.0.1" if can_proxy else None,
+                "upstream_port": port,
+            }
+        )
+    return discovered
+
+
+def web_inventory(config: dict[str, Any]) -> dict[str, Any]:
+    items = _load_web_state()
+    warnings = []
+    nginx_output = ""
+    try:
+        nginx = run([NGINX, "-T"], timeout=30)
+        nginx_output = nginx.stdout + nginx.stderr
+    except OpsFailure:
+        nginx = None
+    if nginx is None or nginx.returncode != 0:
+        warnings.append("Nginx 配置读取失败")
+    try:
+        listeners = _tcp_listeners()
+    except OpsFailure:
+        listeners = {}
+        warnings.append("监听端口读取失败")
+    try:
+        docker_ports = _docker_published_ports()
+    except OpsFailure:
+        docker_ports = {}
+        warnings.append("Docker 端口读取失败")
     for item in items:
         try:
             endpoint = (item["upstream_host"], item["upstream_port"])
@@ -1394,10 +1802,16 @@ def web_inventory() -> dict[str, Any]:
                 item["upstream_healthy"] = True
         except OSError:
             item["upstream_healthy"] = False
+    discovered = _discover_nginx(nginx_output, config, items)
+    discovered.extend(_discover_direct_services(config, listeners, docker_ports, items))
+    discovered.sort(
+        key=lambda item: (item["source"] != "nginx", item["name"].lower(), item["port"])
+    )
     return {
         "items": items,
-        "discovered_domains": sorted(set(discovered)),
+        "discovered": discovered,
         "nginx_active": run([SYSTEMCTL, "is-active", "nginx.service"], timeout=10).returncode == 0,
+        "warnings": warnings,
     }
 
 
@@ -1613,7 +2027,7 @@ def main() -> int:
         elif args.command == "optimization-action":
             print(_json_output(perform_optimization_action(args.action)))
         elif args.command == "web-inventory":
-            print(_json_output(web_inventory()))
+            print(_json_output(web_inventory(config)))
         elif args.command == "web-upsert":
             print(_json_output(upsert_web_service(args.payload)))
         elif args.command == "web-action":

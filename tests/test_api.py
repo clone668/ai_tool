@@ -108,7 +108,11 @@ def test_management_inventory_endpoints(demo_settings) -> None:
             item["id"] == "docker-volumes" and item["actionable"] is False
             for item in maintenance["cleanup"]["candidates"]
         )
-        assert client.get("/api/web-services").json()["nginx_active"] is True
+        web_services = client.get("/api/web-services").json()
+        assert web_services["nginx_active"] is True
+        assert web_services["warnings"] == []
+        assert web_services["discovered"][0]["source"] == "nginx"
+        assert web_services["discovered"][1]["suggested_service"]["upstream_port"] == 3003
 
         external_upstream = client.put(
             "/api/web-services/example",

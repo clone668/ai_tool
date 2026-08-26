@@ -45,5 +45,7 @@ sudo -u ai-tool sudo -n /usr/local/libexec/ai-tool-ops snapshot
 - 终端使用 controlling PTY 提供 job control，并且同一时刻只允许一个已认证会话。
 - 会话断开或登录过期时会关闭 PTY，并通过无参数 root helper 清理 `ai-tool-shell` UID 下的全部进程；`nohup`、`setsid` 和后台任务也不能残留。
 - APT、systemd、Docker、Nginx 与清理动作只能通过 root 拥有的 helper 执行，参数由 helper 再次校验。
+- Web 服务扫描只读检查 Nginx、Docker 发布端口和本机 TCP 监听；发现项必须由管理员确认后才能创建托管入口。
+- AI Tool 只修改 `/etc/nginx/ai-tool-sites-*` 中自己生成的配置，现有 Nginx 站点始终作为外部配置只读展示。
 - `/data` 与 Docker volumes 不会被自动清理；Docker 清理仅涉及构建缓存和悬空镜像。
 - 可通过 `/etc/ai-tool/ai-tool.env` 中的 `AI_TOOL_TERMINAL_ENABLED=0` 完全关闭 Web 终端。

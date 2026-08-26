@@ -1,19 +1,24 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   AppWindow,
+  Container,
   ExternalLink,
   FileText,
+  Globe2,
   LoaderCircle,
+  Network,
   Pencil,
   Plus,
   RefreshCw,
   RotateCw,
   Save,
+  Server,
+  TriangleAlert,
   Trash2,
   X,
 } from 'lucide-react'
 import { api, ApiError } from '../api'
-import type { WebInventory, WebService } from '../types'
+import type { DiscoveredWebService, WebInventory, WebService } from '../types'
 import { OperationDialog } from './OperationDialog'
 
 interface WebServicesViewProps {
@@ -44,8 +49,24 @@ const webActionLabels = {
   reload: '重载配置',
 }
 
+const sourceLabels: Record<DiscoveredWebService['source'], string> = {
+  nginx: 'Nginx',
+  docker: 'Docker',
+  systemd: 'systemd',
+  project: '项目清单',
+  process: '系统进程',
+}
+
+function SourceIcon({ source }: { source: DiscoveredWebService['source'] }) {
+  if (source === 'docker') return <Container size={17} />
+  if (source === 'nginx') return <Globe2 size={17} />
+  if (source === 'systemd') return <Server size={17} />
+  return <Network size={17} />
+}
+
 export function WebServicesView({ csrfToken, onError, onSuccess }: WebServicesViewProps) {
   const [inventory, setInventory] = useState<WebInventory | null>(null)
+  const [mode, setMode] = useState<'discovered' | 'managed'>('discovered')
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
   const [editor, setEditor] = useState<WebService | null>(null)
@@ -95,6 +116,12 @@ export function WebServicesView({ csrfToken, onError, onSuccess }: WebServicesVi
     void loadLogs(service, 'access')
   }
 
+  function createManagedEntry(service: DiscoveredWebService) {
+    if (!service.suggested_service) return
+    setEditor({ ...service.suggested_service })
+    setOriginalId(null)
+  }
+
   async function saveService(event: React.FormEvent) {
     event.preventDefault()
     if (!editor) return
@@ -104,6 +131,7 @@ export function WebServicesView({ csrfToken, onError, onSuccess }: WebServicesVi
       onSuccess(result.message)
       setEditor(null)
       setOriginalId(null)
+      setMode('managed')
       await loadInventory()
     } catch (error) {
       onError(
@@ -137,17 +165,39 @@ export function WebServicesView({ csrfToken, onError, onSuccess }: WebServicesVi
     <section className="management-view web-services-view">
       <div className="view-toolbar management-toolbar">
         <div className={`nginx-state ${inventory?.nginx_active ? 'healthy' : 'offline'}`}><span className="status-dot" /><div><strong>Nginx</strong><span>{inventory?.nginx_active ? '运行中' : '未运行'}</span></div></div>
+        <div className="segmented-control compact-segments web-mode-tabs">
+          <button className={mode === 'discovered' ? 'active' : ''} onClick={() => setMode('discovered')}>自动发现 <span>{inventory?.discovered.length ?? 0}</span></button>
+          <button className={mode === 'managed' ? 'active' : ''} onClick={() => setMode('managed')}>托管入口 <span>{inventory?.items.length ?? 0}</span></button>
+        </div>
         <div className="toolbar-spacer" />
         <button className="primary-button" onClick={() => { setEditor({ ...emptyService }); setOriginalId(null) }}><Plus size={16} />新增入口</button>
         <button className="icon-button" onClick={() => void loadInventory()} disabled={loading} title="刷新 Web 服务" aria-label="刷新 Web 服务"><RefreshCw className={loading ? 'spin' : ''} size={17} /></button>
       </div>
 
-      <div className="section-strip discovered-strip">
-        <strong>已发现域名</strong>
-        <div>{inventory?.discovered_domains.map((domain) => <span className="domain-chip" key={domain}>{domain}</span>)}</div>
-      </div>
+      {inventory?.warnings.length ? <div className="web-discovery-warning" role="status"><TriangleAlert size={16} /><span>{inventory.warnings.join('；')}</span></div> : null}
 
-      <div className="table-scroll management-table-wrap">
+      {mode === 'discovered' && <div className="table-scroll management-table-wrap">
+        <table className="management-table web-discovery-table">
+          <thead><tr><th>服务</th><th>访问地址</th><th>来源</th><th>状态</th><th>暴露范围</th><th>本机上游</th><th>操作</th></tr></thead>
+          <tbody>{inventory?.discovered.map((service) => <tr key={service.id}>
+            <td><div className="primary-cell"><SourceIcon source={service.source} /><div><strong>{service.name}</strong><span>{service.domain ?? `TCP :${service.port}`}</span></div></div></td>
+            <td>{service.exposure === 'lan' ? <a className="domain-link discovery-url" href={service.url} target="_blank" rel="noreferrer">{service.url}<ExternalLink size={13} /></a> : <span className="discovery-url mono-cell">{service.url}</span>}</td>
+            <td><div className="web-source-cell"><span className="source-chip">{sourceLabels[service.source]}</span><span title={service.source_detail}>{service.source_detail}</span></div></td>
+            <td><span className={service.healthy ? 'state-label healthy' : (service.status_code ? 'usage-value danger' : 'state-label neutral')}>{service.status_code ? `HTTP ${service.status_code}` : (service.healthy ? '可达' : '未响应')}</span></td>
+            <td><span className={service.exposure === 'lan' ? 'usage-value warning' : 'state-label neutral'}>{service.exposure === 'lan' ? '局域网' : '仅本机'}</span></td>
+            <td className="mono-cell">{service.upstream_host && service.upstream_port ? `${service.upstream_host}:${service.upstream_port}` : '-'}</td>
+            <td><div className="row-tools">
+              {service.exposure === 'lan' && <a className="icon-button" href={service.url} target="_blank" rel="noreferrer" title="打开服务" aria-label={`打开 ${service.name}`}><ExternalLink size={16} /></a>}
+              {service.suggested_service && <button className="icon-button" onClick={() => createManagedEntry(service)} title="创建 Nginx 入口" aria-label={`为 ${service.name} 创建入口`}><Plus size={16} /></button>}
+              {service.managed && <span className="state-label healthy">已托管</span>}
+              {!service.managed && service.source === 'nginx' && <span className="protected-label">外部配置</span>}
+            </div></td>
+          </tr>)}</tbody>
+        </table>
+        {!inventory?.discovered.length && <div className="empty-state compact">{loading ? <LoaderCircle className="spin" size={22} /> : <Network size={22} />}<strong>{loading ? '正在扫描 Web 服务' : '未发现运行中的 Web 服务'}</strong></div>}
+      </div>}
+
+      {mode === 'managed' && <div className="table-scroll management-table-wrap">
         <table className="management-table web-services-table">
           <thead><tr><th>入口</th><th>域名</th><th>本机上游</th><th>上游状态</th><th>WebSocket</th><th>启用</th><th>操作</th></tr></thead>
           <tbody>{inventory?.items.map((service) => <tr key={service.id}>
@@ -166,7 +216,7 @@ export function WebServicesView({ csrfToken, onError, onSuccess }: WebServicesVi
           </tr>)}</tbody>
         </table>
         {!inventory?.items.length && <div className="empty-state compact">{loading ? <LoaderCircle className="spin" size={22} /> : <AppWindow size={22} />}<strong>{loading ? '正在读取 Web 服务' : '暂无托管的 Web 入口'}</strong></div>}
-      </div>
+      </div>}
 
       {editor && <div className="modal-backdrop" role="presentation" onMouseDown={() => !busy && setEditor(null)}><form className="service-editor" onSubmit={(event) => void saveService(event)} onMouseDown={(event) => event.stopPropagation()}>
         <div className="editor-heading"><div><AppWindow size={20} /><div><strong>{originalId ? '编辑 Web 入口' : '新增 Web 入口'}</strong><span>Nginx 反向代理</span></div></div><button type="button" className="icon-button" onClick={() => setEditor(null)} disabled={busy} title="关闭" aria-label="关闭"><X size={17} /></button></div>

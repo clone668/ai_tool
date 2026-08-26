@@ -281,8 +281,27 @@ export interface WebService {
   upstream_healthy?: boolean
 }
 
+export interface DiscoveredWebService {
+  id: string
+  name: string
+  url: string
+  domain: string | null
+  port: number
+  protocol: 'http' | 'https'
+  source: 'nginx' | 'docker' | 'systemd' | 'project' | 'process'
+  source_detail: string
+  exposure: 'lan' | 'loopback'
+  healthy: boolean
+  status_code: number | null
+  managed: boolean
+  suggested_service: WebService | null
+  upstream_host: string | null
+  upstream_port: number | null
+}
+
 export interface WebInventory {
   items: WebService[]
-  discovered_domains: string[]
+  discovered: DiscoveredWebService[]
   nginx_active: boolean
+  warnings: string[]
 }
