@@ -120,6 +120,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     database = Database(app_settings.data_dir / "ai-tool.db")
     ops = OpsClient(app_settings)
     limiter = LoginLimiter.create()
+    terminal_active = False
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -592,6 +593,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.websocket("/api/terminal/ws")
     async def terminal_socket(websocket: WebSocket) -> None:
+        nonlocal terminal_active
         if not app_settings.terminal_enabled:
             await websocket.close(code=1008, reason="Web 终端未启用")
             return
@@ -607,15 +609,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await websocket.close(code=1008, reason="登录已失效")
             return
 
-        await websocket.accept()
-        database.record_audit(
-            username=session["username"],
-            ip_address=_client_ip(websocket),
-            action="terminal.connect",
-            outcome="success",
-            detail="低权限终端已连接",
-        )
+        if terminal_active:
+            database.record_audit(
+                username=session["username"],
+                ip_address=_client_ip(websocket),
+                action="terminal.connect",
+                outcome="denied",
+                detail="已有终端会话正在使用",
+            )
+            await websocket.close(code=1013, reason="已有终端会话正在使用")
+            return
+        terminal_active = True
+
         try:
+            await websocket.accept()
+            database.record_audit(
+                username=session["username"],
+                ip_address=_client_ip(websocket),
+                action="terminal.connect",
+                outcome="success",
+                detail="低权限终端已连接",
+            )
             expires_at = datetime.fromisoformat(session["expires_at"])
             remaining = max(1.0, (expires_at - datetime.now(timezone.utc)).total_seconds())
             terminal_home = app_settings.terminal_home or (
@@ -631,6 +645,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await websocket.send_json({"type": "error", "message": str(exc)})
             await websocket.close(code=1011)
         finally:
+            terminal_active = False
             database.record_audit(
                 username=session["username"],
                 ip_address=_client_ip(websocket),

@@ -4,12 +4,15 @@ import asyncio
 import os
 import sys
 from pathlib import Path
+from subprocess import CompletedProcess
 
 import pytest
 from app.terminal import (
     SHELL_COMMAND,
+    TERMINAL_CLEANUP_COMMAND,
     TERMINAL_RCFILE,
     TERMINAL_USER,
+    _cleanup_terminal_processes,
     _read_pty,
     _write_pty,
 )
@@ -41,6 +44,30 @@ def test_terminal_uses_managed_interactive_bashrc() -> None:
     assert "checkwinsize" in bashrc
     assert "HISTFILE" in bashrc
     assert "PS1=" in bashrc
+
+
+def test_terminal_cleanup_command_is_fixed(monkeypatch) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(tuple(command))
+        assert kwargs["check"] is False
+        assert kwargs["timeout"] == 5
+        return CompletedProcess(command, 0, '{"ok": true}', "")
+
+    monkeypatch.setattr("app.terminal.subprocess.run", fake_run)
+
+    _cleanup_terminal_processes()
+
+    assert calls == [
+        (
+            "/usr/bin/sudo",
+            "-n",
+            "/usr/local/libexec/ai-tool-ops",
+            "terminal-cleanup",
+        )
+    ]
+    assert calls[0] == TERMINAL_CLEANUP_COMMAND
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="PTY event loop targets Linux")

@@ -17,6 +17,7 @@ import platform
 import pwd
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -48,6 +49,8 @@ WEB_BACKUP_DIR = Path("/etc/ai-tool/backups/web")
 WEB_AVAILABLE_DIR = Path("/etc/nginx/ai-tool-sites-available")
 WEB_ENABLED_DIR = Path("/etc/nginx/ai-tool-sites-enabled")
 WEB_INCLUDE_PATH = Path("/etc/nginx/conf.d/ai-tool-managed.conf")
+TERMINAL_USER = "ai-tool-shell"
+TERMINAL_CLEANUP_GRACE_SECONDS = 1.0
 PACKAGE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9+.-]{0,127}(?::[a-z0-9-]+)?$")
 UNIT_PATTERN = re.compile(r"^[A-Za-z0-9@_.:-]+\.(?:service|timer|socket|path)$")
 CONTAINER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -96,6 +99,86 @@ PROTECTED_UNITS = {
 
 class OpsFailure(RuntimeError):
     pass
+
+
+def _owned_process_ids(uid: int) -> set[int]:
+    process_ids: set[int] = set()
+    try:
+        entries = os.scandir("/proc")
+    except OSError as exc:
+        raise OpsFailure("process inventory is unavailable") from exc
+    with entries:
+        for entry in entries:
+            if not entry.name.isdigit():
+                continue
+            try:
+                if entry.stat(follow_symlinks=False).st_uid != uid:
+                    continue
+                stat_value = Path(entry.path, "stat").read_text(
+                    encoding="ascii", errors="replace"
+                )
+                state = stat_value.rsplit(")", 1)[1].strip().split(maxsplit=1)[0]
+            except (IndexError, OSError):
+                continue
+            if state != "Z":
+                process_ids.add(int(entry.name))
+    return process_ids
+
+
+def _signal_processes(process_ids: set[int], sig: signal.Signals) -> None:
+    for process_id in process_ids:
+        with suppress(ProcessLookupError):
+            os.kill(process_id, sig)
+
+
+def _terminate_uid_processes(uid: int) -> dict[str, int]:
+    targeted = _owned_process_ids(uid)
+    pending = set(targeted)
+    _signal_processes(pending, signal.SIGTERM)
+    deadline = time.monotonic() + TERMINAL_CLEANUP_GRACE_SECONDS
+    empty_scans = 0
+    while time.monotonic() < deadline:
+        time.sleep(0.05)
+        current = _owned_process_ids(uid)
+        new_processes = current - targeted
+        if new_processes:
+            targeted.update(new_processes)
+            _signal_processes(new_processes, signal.SIGTERM)
+        pending = current
+        empty_scans = empty_scans + 1 if not pending else 0
+        if empty_scans >= 2:
+            break
+
+    killed = set(pending)
+    _signal_processes(killed, signal.SIGKILL)
+    kill_deadline = time.monotonic() + TERMINAL_CLEANUP_GRACE_SECONDS
+    empty_scans = 0
+    while killed and time.monotonic() < kill_deadline:
+        time.sleep(0.05)
+        pending = _owned_process_ids(uid)
+        new_processes = pending - targeted
+        if new_processes:
+            targeted.update(new_processes)
+            killed.update(new_processes)
+            _signal_processes(new_processes, signal.SIGKILL)
+        empty_scans = empty_scans + 1 if not pending else 0
+        if empty_scans >= 2:
+            break
+    if pending:
+        raise OpsFailure("terminal processes could not be fully terminated")
+    return {"matched": len(targeted), "killed": len(killed), "remaining": 0}
+
+
+def terminal_cleanup() -> dict[str, Any]:
+    try:
+        terminal_user = pwd.getpwnam(TERMINAL_USER)
+    except KeyError as exc:
+        raise OpsFailure("terminal system user does not exist") from exc
+    if terminal_user.pw_uid <= 0:
+        raise OpsFailure("terminal system user has an unsafe UID")
+    result: dict[str, Any] = {"ok": True, "user": TERMINAL_USER}
+    result.update(_terminate_uid_processes(terminal_user.pw_uid))
+    return result
 
 
 def run(
@@ -1424,6 +1507,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(add_help=False)
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("snapshot")
+    subparsers.add_parser("terminal-cleanup")
 
     action_parser = subparsers.add_parser("action")
     action_parser.add_argument("project_id")
@@ -1489,6 +1573,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     try:
         args = build_parser().parse_args()
+        if args.command == "terminal-cleanup":
+            print(json.dumps(terminal_cleanup(), ensure_ascii=False))
+            return 0
         config = load_config()
         if args.command == "snapshot":
             print(json.dumps(snapshot(config), ensure_ascii=False))

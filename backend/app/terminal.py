@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import signal
+import subprocess
 import time
 from contextlib import suppress
 from pathlib import Path
@@ -13,6 +15,12 @@ from fastapi import WebSocket
 
 TERMINAL_USER = "ai-tool-shell"
 TERMINAL_RCFILE = "/etc/ai-tool/terminal.bashrc"
+TERMINAL_CLEANUP_COMMAND = (
+    "/usr/bin/sudo",
+    "-n",
+    "/usr/local/libexec/ai-tool-ops",
+    "terminal-cleanup",
+)
 SHELL_COMMAND = (
     "/usr/bin/sudo",
     "-n",
@@ -26,6 +34,7 @@ SHELL_COMMAND = (
     TERMINAL_RCFILE,
     "-i",
 )
+LOGGER = logging.getLogger(__name__)
 
 
 class TerminalUnavailable(RuntimeError):
@@ -117,6 +126,31 @@ def _terminate_shell(child_pid: int) -> None:
     _wait_for_child(child_pid, 1)
 
 
+def _cleanup_terminal_processes() -> None:
+    try:
+        result = subprocess.run(
+            TERMINAL_CLEANUP_COMMAND,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env={"LANG": "C.UTF-8", "PATH": "/usr/sbin:/usr/bin:/sbin:/bin"},
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError("terminal cleanup helper could not be executed") from exc
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()[-1000:]
+        raise RuntimeError(detail or "terminal cleanup helper failed")
+
+
+def _shutdown_terminal(child_pid: int) -> None:
+    try:
+        _cleanup_terminal_processes()
+    except RuntimeError:
+        LOGGER.warning("Privileged terminal process cleanup failed", exc_info=True)
+    _terminate_shell(child_pid)
+
+
 def _mark_ready(future: asyncio.Future[None]) -> None:
     if not future.done():
         future.set_result(None)
@@ -200,4 +234,4 @@ async def serve_terminal(websocket: WebSocket, home: Path) -> None:
         await asyncio.gather(sender, receiver, return_exceptions=True)
         with suppress(OSError):
             os.close(master_fd)
-        await asyncio.to_thread(_terminate_shell, child_pid)
+        await asyncio.to_thread(_shutdown_terminal, child_pid)

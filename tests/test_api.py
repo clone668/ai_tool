@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import suppress
+
 import pytest
 from app.main import create_app
 from fastapi.testclient import TestClient
@@ -227,3 +229,27 @@ def test_terminal_websocket_rejects_cross_origin(demo_settings) -> None:
         ):
             pass
         assert rejected.value.code == 1008
+
+
+def test_terminal_websocket_allows_only_one_active_session(demo_settings, monkeypatch) -> None:
+    async def hold_terminal(websocket, _home) -> None:
+        with suppress(WebSocketDisconnect):
+            await websocket.receive_text()
+
+    monkeypatch.setattr("app.main.serve_terminal", hold_terminal)
+
+    with TestClient(create_app(demo_settings)) as client:
+        login(client)
+        headers = {"Origin": "http://testserver"}
+        with client.websocket_connect("/api/terminal/ws", headers=headers):
+            with pytest.raises(WebSocketDisconnect) as rejected, client.websocket_connect(
+                "/api/terminal/ws", headers=headers
+            ):
+                pass
+            assert rejected.value.code == 1013
+
+        audit = client.get("/api/audit").json()["items"]
+        assert any(
+            item["action"] == "terminal.connect" and item["outcome"] == "denied"
+            for item in audit
+        )
