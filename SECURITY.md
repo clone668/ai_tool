@@ -6,6 +6,8 @@ AI Tool is designed for a trusted private network. The production service listen
 
 The web process runs as the unprivileged `ai-tool` user. The browser terminal uses a separate `ai-tool-shell` account that cannot invoke the privileged helper, and requires both a valid session cookie and an exact same-origin WebSocket handshake. Privileged operations go through the root-owned `/usr/local/libexec/ai-tool-ops` helper, which validates every action and argument and never executes a shell.
 
+Terminal processes run in a dedicated controlling PTY and process group. Disconnecting the WebSocket or reaching the authenticated session expiry closes the PTY and terminates the full process group so background jobs cannot survive the browser session.
+
 Package removal blocks essential system packages. Service controls protect SSH, Docker, and AI Tool itself. Cleanup actions are fixed allowlisted operations; `/data` and Docker volumes are never removed automatically. Managed Nginx upstreams are limited to `127.0.0.1` and `localhost`.
 
 Software removal, cleanup, and optimization endpoints require a short-lived single-use confirmation token issued with the corresponding preview. Replayed, expired, or mismatched confirmations are rejected and audited.

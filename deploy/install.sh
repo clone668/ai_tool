@@ -47,6 +47,7 @@ npm --prefix "${APP_DIR}/frontend" ci --no-audit --no-fund
 npm --prefix "${APP_DIR}/frontend" run build
 
 install -o root -g root -m 0644 "${APP_DIR}/config/projects.json" "${CONFIG_DIR}/projects.json"
+install -o root -g root -m 0644 "${APP_DIR}/deploy/terminal.bashrc" "${CONFIG_DIR}/terminal.bashrc"
 install -o root -g root -m 0755 "${APP_DIR}/deploy/ai_tool_ops.py" /usr/local/libexec/ai-tool-ops
 install -o root -g root -m 0644 "${APP_DIR}/deploy/ai-tool.service" "/etc/systemd/system/${SERVICE_NAME}"
 install -o root -g root -m 0440 "${APP_DIR}/deploy/ai-tool.sudoers" /etc/sudoers.d/ai-tool

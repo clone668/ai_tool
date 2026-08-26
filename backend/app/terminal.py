@@ -4,12 +4,28 @@ import asyncio
 import json
 import os
 import signal
-import subprocess
+import time
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
-from fastapi import WebSocket, WebSocketDisconnect
+from fastapi import WebSocket
+
+TERMINAL_USER = "ai-tool-shell"
+TERMINAL_RCFILE = "/etc/ai-tool/terminal.bashrc"
+SHELL_COMMAND = (
+    "/usr/bin/sudo",
+    "-n",
+    "-H",
+    "-u",
+    TERMINAL_USER,
+    "--",
+    "/bin/bash",
+    "--noprofile",
+    "--rcfile",
+    TERMINAL_RCFILE,
+    "-i",
+)
 
 
 class TerminalUnavailable(RuntimeError):
@@ -30,55 +46,116 @@ def _resize_terminal(master_fd: int, rows: Any, cols: Any) -> None:
     fcntl.ioctl(master_fd, termios.TIOCSWINSZ, size)
 
 
-def _start_shell(home: Path) -> tuple[int, subprocess.Popen[bytes]]:
-    if os.name == "nt":
-        raise TerminalUnavailable("Web 终端仅在 Linux 部署环境中可用")
-
-    import pty
+def _validate_terminal_home(home: Path) -> None:
     import pwd
 
     try:
-        shell_user = pwd.getpwnam("ai-tool-shell")
+        shell_user = pwd.getpwnam(TERMINAL_USER)
         home_stat = home.stat()
     except (KeyError, OSError) as exc:
         raise TerminalUnavailable("低权限终端账户或目录不可用") from exc
     if not home.is_dir() or home_stat.st_uid != shell_user.pw_uid:
         raise TerminalUnavailable("低权限终端目录权限无效")
-    master_fd, slave_fd = pty.openpty()
-    environment = {"LANG": "C.UTF-8", "PATH": "/usr/bin:/bin", "TERM": "xterm-256color"}
+
+
+def _start_shell(home: Path) -> tuple[int, int]:
+    if os.name == "nt":
+        raise TerminalUnavailable("Web 终端仅在 Linux 部署环境中可用")
+
+    import pty
+
+    _validate_terminal_home(home)
+    environment = {
+        "LANG": "C.UTF-8",
+        "PATH": "/usr/bin:/bin",
+        "TERM": "xterm-256color",
+    }
     try:
-        process = subprocess.Popen(
-            [
-                "/usr/bin/sudo",
-                "-n",
-                "-H",
-                "-u",
-                "ai-tool-shell",
-                "--",
-                "/bin/bash",
-                "--noprofile",
-                "--norc",
-            ],
-            cwd=home,
-            env=environment,
-            stdin=slave_fd,
-            stdout=slave_fd,
-            stderr=slave_fd,
-            close_fds=True,
-            start_new_session=True,
-        )
+        child_pid, master_fd = pty.fork()
     except OSError as exc:
-        os.close(master_fd)
-        raise TerminalUnavailable("无法启动低权限终端") from exc
-    finally:
-        os.close(slave_fd)
-    return master_fd, process
+        raise TerminalUnavailable("无法分配控制终端") from exc
+
+    if child_pid == 0:
+        try:
+            os.chdir(home)
+            os.execve(SHELL_COMMAND[0], SHELL_COMMAND, environment)
+        except BaseException:
+            with suppress(OSError):
+                os.write(2, b"Unable to start the restricted terminal.\r\n")
+            os._exit(126)
+    return master_fd, child_pid
+
+
+def _wait_for_child(child_pid: int, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            waited_pid, _ = os.waitpid(child_pid, os.WNOHANG)
+        except ChildProcessError:
+            return True
+        if waited_pid == child_pid:
+            return True
+        if timeout <= 0 or time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+    return False
+
+
+def _terminate_shell(child_pid: int) -> None:
+    if _wait_for_child(child_pid, 0):
+        return
+    with suppress(ProcessLookupError, PermissionError):
+        os.killpg(child_pid, signal.SIGTERM)
+    with suppress(ProcessLookupError, PermissionError):
+        os.kill(child_pid, signal.SIGTERM)
+    if _wait_for_child(child_pid, 2):
+        return
+    with suppress(ProcessLookupError, PermissionError):
+        os.killpg(child_pid, signal.SIGKILL)
+    with suppress(ProcessLookupError, PermissionError):
+        os.kill(child_pid, signal.SIGKILL)
+    _wait_for_child(child_pid, 1)
+
+
+def _mark_ready(future: asyncio.Future[None]) -> None:
+    if not future.done():
+        future.set_result(None)
+
+
+async def _read_pty(master_fd: int) -> bytes:
+    loop = asyncio.get_running_loop()
+    while True:
+        readable = loop.create_future()
+        loop.add_reader(master_fd, _mark_ready, readable)
+        try:
+            await readable
+            return os.read(master_fd, 4096)
+        except BlockingIOError:
+            continue
+        finally:
+            loop.remove_reader(master_fd)
+
+
+async def _write_pty(master_fd: int, data: bytes) -> None:
+    loop = asyncio.get_running_loop()
+    offset = 0
+    while offset < len(data):
+        try:
+            offset += os.write(master_fd, data[offset:])
+            continue
+        except BlockingIOError:
+            writable = loop.create_future()
+            loop.add_writer(master_fd, _mark_ready, writable)
+            try:
+                await writable
+            finally:
+                loop.remove_writer(master_fd)
 
 
 async def _send_output(websocket: WebSocket, master_fd: int) -> None:
     while True:
         try:
-            data = await asyncio.to_thread(os.read, master_fd, 4096)
+            data = await _read_pty(master_fd)
         except OSError:
             return
         if not data:
@@ -104,36 +181,23 @@ async def _receive_input(websocket: WebSocket, master_fd: int) -> None:
         if message_type == "input":
             data = message.get("data")
             if isinstance(data, str) and len(data) <= 16_384:
-                await asyncio.to_thread(os.write, master_fd, data.encode("utf-8"))
+                await _write_pty(master_fd, data.encode("utf-8"))
         elif message_type == "resize":
             _resize_terminal(master_fd, message.get("rows"), message.get("cols"))
 
 
 async def serve_terminal(websocket: WebSocket, home: Path) -> None:
-    master_fd, process = _start_shell(home)
+    master_fd, child_pid = _start_shell(home)
+    os.set_blocking(master_fd, False)
     _resize_terminal(master_fd, 28, 100)
     sender = asyncio.create_task(_send_output(websocket, master_fd))
     receiver = asyncio.create_task(_receive_input(websocket, master_fd))
     try:
-        done, pending = await asyncio.wait(
-            {sender, receiver}, return_when=asyncio.FIRST_COMPLETED
-        )
-        for task in pending:
-            task.cancel()
-        for task in done:
-            with suppress(WebSocketDisconnect, asyncio.CancelledError, OSError):
-                await task
+        await asyncio.wait({sender, receiver}, return_when=asyncio.FIRST_COMPLETED)
     finally:
         sender.cancel()
         receiver.cancel()
+        await asyncio.gather(sender, receiver, return_exceptions=True)
         with suppress(OSError):
             os.close(master_fd)
-        if process.poll() is None:
-            with suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGTERM)
-            try:
-                await asyncio.to_thread(process.wait, 2)
-            except subprocess.TimeoutExpired:
-                with suppress(ProcessLookupError):
-                    os.killpg(process.pid, signal.SIGKILL)
-                await asyncio.to_thread(process.wait)
+        await asyncio.to_thread(_terminate_shell, child_pid)

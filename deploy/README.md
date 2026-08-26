@@ -42,6 +42,7 @@ sudo -u ai-tool sudo -n /usr/local/libexec/ai-tool-ops snapshot
 ## 权限边界
 
 - Web 服务以 `ai-tool` 运行，浏览器终端以不能调用 root helper 的 `ai-tool-shell` 运行。
+- 终端使用 controlling PTY 提供 job control；会话断开或登录过期时会回收整个终端进程组。
 - APT、systemd、Docker、Nginx 与清理动作只能通过 root 拥有的 helper 执行，参数由 helper 再次校验。
 - `/data` 与 Docker volumes 不会被自动清理；Docker 清理仅涉及构建缓存和悬空镜像。
 - 可通过 `/etc/ai-tool/ai-tool.env` 中的 `AI_TOOL_TERMINAL_ENABLED=0` 完全关闭 Web 终端。
