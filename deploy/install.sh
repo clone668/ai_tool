@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 APP_DIR="/data/ai-tool"
 DATA_DIR="/data/ai-tool-data"
+TERMINAL_DIR="/data/ai-tool-terminal"
 CONFIG_DIR="/etc/ai-tool"
 SERVICE_NAME="ai-tool.service"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -32,9 +33,13 @@ done
 if ! id ai-tool >/dev/null 2>&1; then
   useradd --system --user-group --home-dir /nonexistent --shell /usr/sbin/nologin ai-tool
 fi
+if ! id ai-tool-shell >/dev/null 2>&1; then
+  useradd --system --user-group --home-dir "${TERMINAL_DIR}" --shell /usr/sbin/nologin ai-tool-shell
+fi
 
 install -d -o root -g root -m 0755 "${CONFIG_DIR}"
 install -d -o ai-tool -g ai-tool -m 0750 "${DATA_DIR}"
+install -d -o ai-tool-shell -g ai-tool -m 0710 "${TERMINAL_DIR}"
 
 python3 -m venv "${APP_DIR}/.venv"
 "${APP_DIR}/.venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir -r "${APP_DIR}/requirements.txt"
@@ -59,11 +64,19 @@ if [[ -n "${AI_TOOL_ADMIN_PASSWORD:-}" ]]; then
     printf 'AI_TOOL_PASSWORD_HASH=%s\n' "${PASSWORD_HASH}"
     printf 'AI_TOOL_SESSION_HOURS=%s\n' "12"
     printf 'AI_TOOL_COOKIE_SECURE=%s\n' "0"
+    printf 'AI_TOOL_TERMINAL_ENABLED=%s\n' "1"
+    printf 'AI_TOOL_TERMINAL_HOME=%s\n' "${TERMINAL_DIR}"
   } > "${ENV_FILE}"
   unset AI_TOOL_ADMIN_PASSWORD AI_TOOL_PASSWORD_INPUT PASSWORD_HASH
 elif [[ ! -f "${ENV_FILE}" ]]; then
   echo "AI_TOOL_ADMIN_PASSWORD is required for the first installation" >&2
   exit 1
+fi
+if ! grep -q '^AI_TOOL_TERMINAL_ENABLED=' "${ENV_FILE}"; then
+  printf 'AI_TOOL_TERMINAL_ENABLED=%s\n' "1" >> "${ENV_FILE}"
+fi
+if ! grep -q '^AI_TOOL_TERMINAL_HOME=' "${ENV_FILE}"; then
+  printf 'AI_TOOL_TERMINAL_HOME=%s\n' "${TERMINAL_DIR}" >> "${ENV_FILE}"
 fi
 chown root:ai-tool "${ENV_FILE}"
 chmod 0640 "${ENV_FILE}"

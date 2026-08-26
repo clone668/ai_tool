@@ -6,6 +6,7 @@ export interface SessionInfo {
   username: string
   csrf_token: string
   expires_at: string
+  terminal_enabled: boolean
 }
 
 export interface ContainerState {
@@ -100,4 +101,188 @@ export interface AuditItem {
   action: string
   outcome: 'success' | 'failed' | 'denied'
   detail: string
+}
+
+export type PackageManager = 'apt' | 'snap'
+export type SoftwareAction = 'install' | 'upgrade' | 'remove' | 'purge' | 'refresh'
+
+export interface SoftwareItem {
+  manager: PackageManager
+  name: string
+  version: string | null
+  architecture?: string | null
+  revision?: string
+  tracking?: string
+  size_bytes: number | null
+  installed: boolean
+  description: string
+  protected: boolean
+}
+
+export interface SoftwareInventory {
+  query: string
+  items: SoftwareItem[]
+  counts: { installed: number; available: number }
+  managers: { apt: boolean; snap: boolean }
+}
+
+export interface SoftwarePlan {
+  manager: PackageManager
+  name: string
+  action: SoftwareAction
+  changes: string[]
+  summary: string
+  confirmation_token: string
+}
+
+export type StartupScope = 'system' | 'user' | 'docker'
+export type StartupAction = 'start' | 'stop' | 'restart' | 'enable' | 'disable' | 'policy'
+
+export interface StartupItem {
+  scope: StartupScope
+  name: string
+  enabled_state: string
+  active_state: string
+  substate: string
+  protected: boolean
+}
+
+export interface StartupInventory {
+  items: StartupItem[]
+  total: number
+}
+
+export interface FilesystemState {
+  source: string
+  fstype: string
+  mountpoint: string
+  size: number
+  used: number
+  available: number
+  percent: number
+  inodes?: number
+  inodes_used?: number
+  inodes_percent?: number
+}
+
+export interface ProcessState {
+  pid: number
+  user: string
+  command: string
+  cpu_percent: number
+  memory_percent: number
+  rss_bytes: number
+  state: string
+}
+
+export interface ContainerResourceState {
+  name: string
+  cpu: string
+  memory: string
+  memory_percent: string
+  network: string
+  block_io: string
+  pids: string
+}
+
+export interface NetworkState {
+  interface: string
+  received_bytes: number
+  received_packets: number
+  received_errors: number
+  sent_bytes: number
+  sent_packets: number
+  sent_errors: number
+}
+
+export interface MetricPoint {
+  created_at: string
+  cpu_percent: number
+  memory_percent: number
+  load_one: number
+  disk_percent: number
+}
+
+export interface SystemDetails {
+  generated_at: string
+  cpu: {
+    model: string
+    cores: number
+    percent: number
+    load_average: number[]
+    temperatures: { label: string; celsius: number }[]
+  }
+  memory: {
+    total: number
+    available: number
+    used: number
+    percent: number
+    cached: number
+    buffers: number
+    swap_total: number
+    swap_used: number
+    swap_percent: number
+  }
+  filesystems: FilesystemState[]
+  block_devices: Record<string, unknown>[]
+  processes: ProcessState[]
+  containers: ContainerResourceState[]
+  network: NetworkState[]
+  uptime_seconds: number
+  failed_units: number
+  smart_available: boolean
+  history: MetricPoint[]
+}
+
+export type RiskLevel = 'safe' | 'medium' | 'high'
+
+export interface CleanupCandidate {
+  id: string
+  label: string
+  risk: RiskLevel
+  size_bytes: number | null
+  detail: string
+  actionable?: boolean
+  confirmation_token?: string
+}
+
+export interface OptimizationItem {
+  id: string
+  label: string
+  status: 'applied' | 'recommended' | 'attention' | 'ok'
+  detail: string
+  reversible: boolean
+  actionable?: boolean
+  confirmation_action?: string
+  confirmation_token?: string
+}
+
+export interface MaintenanceDetails {
+  cleanup: {
+    generated_at: string
+    candidates: CleanupCandidate[]
+    docker: Record<string, unknown>[]
+  }
+  optimization: {
+    generated_at: string
+    recommendations: OptimizationItem[]
+    facts: { swappiness: number; reboot_required: boolean; updates: number }
+  }
+}
+
+export interface WebService {
+  id: string
+  name: string
+  domain: string
+  upstream_host: '127.0.0.1' | 'localhost'
+  upstream_port: number
+  websocket: boolean
+  enabled: boolean
+  upstream_healthy?: boolean
+}
+
+export interface WebInventory {
+  items: WebService[]
+  discovered_domains: string[]
+  nginx_active: boolean
 }

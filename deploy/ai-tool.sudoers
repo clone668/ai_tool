@@ -1,2 +1,3 @@
 Defaults:ai-tool !requiretty
 ai-tool ALL=(root) NOPASSWD: /usr/local/libexec/ai-tool-ops *
+ai-tool ALL=(ai-tool-shell) NOPASSWD: /bin/bash --noprofile --norc

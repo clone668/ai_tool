@@ -18,23 +18,13 @@ RestartSec=3
 TimeoutStartSec=45
 TimeoutStopSec=20
 UMask=0077
+TasksMax=256
 
-PrivateTmp=true
-PrivateDevices=true
-ProtectSystem=strict
 ProtectHome=read-only
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectKernelLogs=true
-ProtectControlGroups=true
-ProtectClock=true
-ProtectHostname=true
-ProtectProc=invisible
 LockPersonality=true
-RestrictNamespaces=true
 RestrictRealtime=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ReadOnlyPaths=/data/ai-tool /etc/ai-tool
+ReadOnlyPaths=/data/ai-tool
 ReadWritePaths=/data/ai-tool-data
 
 [Install]

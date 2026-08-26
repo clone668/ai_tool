@@ -37,15 +37,18 @@ class Settings:
     session_hours: int
     password_hash: str | None
     demo_password: str | None
+    terminal_enabled: bool = True
+    terminal_home: Path | None = None
 
     @classmethod
     def from_env(cls) -> Settings:
         demo = _env_bool("AI_TOOL_DEMO")
+        data_dir = Path(os.getenv("AI_TOOL_DATA_DIR", str(ROOT_DIR / ".data")))
         return cls(
             config_path=Path(
                 os.getenv("AI_TOOL_CONFIG", str(ROOT_DIR / "config" / "projects.json"))
             ),
-            data_dir=Path(os.getenv("AI_TOOL_DATA_DIR", str(ROOT_DIR / ".data"))),
+            data_dir=data_dir,
             static_dir=Path(os.getenv("AI_TOOL_STATIC_DIR", str(ROOT_DIR / "frontend" / "dist"))),
             ops_helper=Path(os.getenv("AI_TOOL_OPS_HELPER", "/usr/local/libexec/ai-tool-ops")),
             demo=demo,
@@ -53,6 +56,10 @@ class Settings:
             session_hours=max(1, min(int(os.getenv("AI_TOOL_SESSION_HOURS", "12")), 168)),
             password_hash=os.getenv("AI_TOOL_PASSWORD_HASH"),
             demo_password=os.getenv("AI_TOOL_PASSWORD") if demo else None,
+            terminal_enabled=_env_bool("AI_TOOL_TERMINAL_ENABLED", True),
+            terminal_home=Path(
+                os.getenv("AI_TOOL_TERMINAL_HOME", str(data_dir / "terminal-home"))
+            ),
         )
 
 

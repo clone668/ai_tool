@@ -1,4 +1,20 @@
-import type { ActionName, AuditItem, DashboardSnapshot, SessionInfo } from './types'
+import type {
+  ActionName,
+  AuditItem,
+  DashboardSnapshot,
+  MaintenanceDetails,
+  PackageManager,
+  SessionInfo,
+  SoftwareAction,
+  SoftwareInventory,
+  SoftwarePlan,
+  StartupAction,
+  StartupInventory,
+  StartupScope,
+  SystemDetails,
+  WebInventory,
+  WebService,
+} from './types'
 
 export class ApiError extends Error {
   status: number
@@ -58,4 +74,79 @@ export const api = {
     },
   ),
   audit: () => request<{ items: AuditItem[] }>('/api/audit?limit=150'),
+  software: (query = '') => request<SoftwareInventory>(
+    `/api/software?query=${encodeURIComponent(query)}&limit=300`,
+  ),
+  softwarePlan: (
+    csrfToken: string,
+    manager: PackageManager,
+    name: string,
+    action: SoftwareAction,
+  ) => request<SoftwarePlan>('/api/software/plan', {
+    method: 'POST',
+    headers: { 'X-CSRF-Token': csrfToken },
+    body: JSON.stringify({ manager, name, action }),
+  }),
+  softwareAction: (
+    csrfToken: string,
+    manager: PackageManager,
+    name: string,
+    action: SoftwareAction,
+    confirmationToken?: string,
+  ) => request<{ ok: boolean; message: string }>('/api/software/actions', {
+    method: 'POST',
+    headers: { 'X-CSRF-Token': csrfToken },
+    body: JSON.stringify({ manager, name, action, confirmation_token: confirmationToken }),
+  }),
+  startup: (query = '') => request<StartupInventory>(
+    `/api/startup?query=${encodeURIComponent(query)}&limit=1000`,
+  ),
+  startupAction: (
+    csrfToken: string,
+    scope: StartupScope,
+    name: string,
+    action: StartupAction,
+    value = '_',
+  ) => request<{ ok: boolean; message: string }>('/api/startup/actions', {
+    method: 'POST',
+    headers: { 'X-CSRF-Token': csrfToken },
+    body: JSON.stringify({ scope, name, action, value }),
+  }),
+  system: () => request<SystemDetails>('/api/system?history_limit=120'),
+  maintenance: () => request<MaintenanceDetails>('/api/maintenance'),
+  maintenanceAction: (csrfToken: string, action: string, confirmationToken: string) =>
+    request<{ ok: boolean; message: string }>('/api/maintenance/actions', {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': csrfToken },
+      body: JSON.stringify({ action, confirmation_token: confirmationToken }),
+    }),
+  optimizationAction: (csrfToken: string, action: string, confirmationToken: string) =>
+    request<{ ok: boolean; message: string }>('/api/optimization/actions', {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': csrfToken },
+      body: JSON.stringify({ action, confirmation_token: confirmationToken }),
+    }),
+  webServices: () => request<WebInventory>('/api/web-services'),
+  saveWebService: (csrfToken: string, service: WebService) =>
+    request<{ ok: boolean; message: string }>(
+      `/api/web-services/${encodeURIComponent(service.id)}`,
+      {
+        method: 'PUT',
+        headers: { 'X-CSRF-Token': csrfToken },
+        body: JSON.stringify(service),
+      },
+    ),
+  webServiceAction: (csrfToken: string, serviceId: string, action: string) =>
+    request<{ ok: boolean; message: string }>(
+      `/api/web-services/${encodeURIComponent(serviceId)}/actions`,
+      {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': csrfToken },
+        body: JSON.stringify({ action }),
+      },
+    ),
+  webServiceLogs: (serviceId: string, stream: 'access' | 'error', lines = 200) =>
+    request<{ content: string; stream: string; lines: number }>(
+      `/api/web-services/${encodeURIComponent(serviceId)}/logs?stream=${stream}&lines=${lines}`,
+    ),
 }

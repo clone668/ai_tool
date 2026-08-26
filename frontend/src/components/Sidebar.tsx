@@ -1,13 +1,28 @@
 import {
+  AppWindow,
+  Boxes,
+  Gauge,
   History,
   LayoutDashboard,
   LogOut,
+  PackageSearch,
   ScrollText,
   ServerCog,
+  Sparkles,
+  TerminalSquare,
   UserRound,
 } from 'lucide-react'
 
-export type ViewName = 'overview' | 'logs' | 'audit'
+export type ViewName =
+  | 'overview'
+  | 'software'
+  | 'startup'
+  | 'system'
+  | 'maintenance'
+  | 'web'
+  | 'terminal'
+  | 'logs'
+  | 'audit'
 
 interface SidebarProps {
   activeView: ViewName
@@ -18,6 +33,12 @@ interface SidebarProps {
 
 const navigation = [
   { id: 'overview' as const, label: '总览', icon: LayoutDashboard },
+  { id: 'software' as const, label: '软件', icon: PackageSearch },
+  { id: 'startup' as const, label: '自启动', icon: Boxes },
+  { id: 'system' as const, label: '系统', icon: Gauge },
+  { id: 'maintenance' as const, label: '维护', icon: Sparkles },
+  { id: 'web' as const, label: 'Web 服务', icon: AppWindow },
+  { id: 'terminal' as const, label: '终端', icon: TerminalSquare },
   { id: 'logs' as const, label: '日志', icon: ScrollText },
   { id: 'audit' as const, label: '审计', icon: History },
 ]

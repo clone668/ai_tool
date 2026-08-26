@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { AlertTriangle, LoaderCircle, RefreshCw, ServerCog, X } from 'lucide-react'
 import { api, ApiError } from './api'
 import { actionLabels, formatDate } from './format'
@@ -6,8 +6,17 @@ import type { ActionName, Component, DashboardSnapshot, Project, SessionInfo } f
 import { AuditView } from './components/AuditView'
 import { LoginView } from './components/LoginView'
 import { LogsView } from './components/LogsView'
+import { MaintenanceView } from './components/MaintenanceView'
 import { Overview } from './components/Overview'
 import { Sidebar, type ViewName } from './components/Sidebar'
+import { SoftwareView } from './components/SoftwareView'
+import { StartupView } from './components/StartupView'
+import { SystemView } from './components/SystemView'
+import { WebServicesView } from './components/WebServicesView'
+
+const TerminalView = lazy(() => import('./components/TerminalView').then(
+  (module) => ({ default: module.TerminalView }),
+))
 
 interface PendingAction {
   project: Project
@@ -22,6 +31,12 @@ interface LogSelection {
 
 const viewTitles: Record<ViewName, { title: string; subtitle: string }> = {
   overview: { title: '运行总览', subtitle: '应用、基础服务与定时任务' },
+  software: { title: '软件管理', subtitle: 'APT 与 Snap 软件包' },
+  startup: { title: '开机启动', subtitle: 'systemd 与 Docker 重启策略' },
+  system: { title: '系统监控', subtitle: '资源、磁盘、进程与网络' },
+  maintenance: { title: '系统维护', subtitle: '清理扫描与可回滚优化' },
+  web: { title: 'Web 服务', subtitle: 'Nginx 入口、上游与访问日志' },
+  terminal: { title: '命令终端', subtitle: '隔离的低权限会话' },
   logs: { title: '日志中心', subtitle: 'systemd journal 与容器日志' },
   audit: { title: '操作审计', subtitle: '登录与运维动作记录' },
 }
@@ -198,7 +213,37 @@ export default function App() {
         </header>
 
         <main className="content-area">
-          {snapshot ? (
+          {activeView === 'software' ? (
+            <SoftwareView
+              csrfToken={session.csrf_token}
+              onError={handleViewError}
+              onSuccess={(message) => showToast(message, 'success')}
+            />
+          ) : activeView === 'startup' ? (
+            <StartupView
+              csrfToken={session.csrf_token}
+              onError={handleViewError}
+              onSuccess={(message) => showToast(message, 'success')}
+            />
+          ) : activeView === 'system' ? (
+            <SystemView onError={handleViewError} />
+          ) : activeView === 'maintenance' ? (
+            <MaintenanceView
+              csrfToken={session.csrf_token}
+              onError={handleViewError}
+              onSuccess={(message) => showToast(message, 'success')}
+            />
+          ) : activeView === 'web' ? (
+            <WebServicesView
+              csrfToken={session.csrf_token}
+              onError={handleViewError}
+              onSuccess={(message) => showToast(message, 'success')}
+            />
+          ) : activeView === 'terminal' ? (
+            <Suspense fallback={<div className="load-failure dashboard-loading"><LoaderCircle className="spin" size={28} /><strong>正在载入终端</strong></div>}>
+              <TerminalView enabled={session.terminal_enabled} />
+            </Suspense>
+          ) : snapshot ? (
             <>
               {activeView === 'overview' && (
                 <Overview

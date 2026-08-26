@@ -1,16 +1,24 @@
 # AI Tool
 
-面向单台 Ubuntu 主机的轻量运维控制台，用统一项目视图管理 systemd、用户级 systemd、Docker Compose、端口检查和定时任务。
+面向单台 Ubuntu 主机的综合管理控制台，用统一 Web 界面管理软件、开机启动、系统资源、维护任务、Nginx 入口和已部署项目。
 
 ## 功能
 
 - 主机 CPU、负载、内存、磁盘和运行时间概览
+- CPU、内存、磁盘、inode、块设备、进程、容器、网络与温度详情
+- APT/Snap 软件查询、安装、升级和带预览的卸载
+- systemd、用户级 systemd 与 Docker 重启策略管理
+- 分风险垃圾扫描、固定白名单清理与可回滚系统优化
+- 托管 Nginx 反向代理入口及访问/错误日志
+- 以隔离的 `ai-tool-shell` 低权限账户运行的浏览器终端
 - 按项目聚合 systemd、用户级 systemd 和 Docker Compose 组件
 - TCP 与 HTTP 健康检查
 - 经过双重白名单校验的启动、停止和重启操作
 - systemd journal、Docker Compose 和定时任务日志
 - 登录会话、CSRF 防护、登录限流和完整操作审计
 - 响应式 Web 控制台
+
+`/data` 和 Docker 数据卷不在自动清理或卸载范围内。所有修改系统状态的操作均需要登录、同源与 CSRF 校验，并写入审计记录。
 
 ## 本地开发
 
@@ -23,6 +31,7 @@ npm --prefix frontend install
 npm --prefix frontend run build
 $env:AI_TOOL_DEMO = "1"
 $env:AI_TOOL_PASSWORD = "dev-password"
+$env:AI_TOOL_TERMINAL_ENABLED = "0"
 .\.venv\Scripts\uvicorn app.main:app --app-dir backend --reload --port 8000
 ```
 
@@ -39,4 +48,4 @@ npm --prefix frontend run build
 
 ## 生产部署
 
-仓库内的 `deploy/install.sh` 面向 Ubuntu 24.04，会将应用安装到 `/data/ai-tool`，创建独立的 `ai-tool` 系统账户，并安装 root 拥有的动作白名单辅助程序。部署参数和具体步骤见 [deploy/README.md](deploy/README.md)。
+仓库内的 `deploy/install.sh` 面向 Ubuntu 24.04，会将应用安装到 `/data/ai-tool`，创建独立的 `ai-tool` 系统账户，并安装 root 拥有且严格校验参数的动作辅助程序。部署参数和具体步骤见 [deploy/README.md](deploy/README.md)。

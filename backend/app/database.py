@@ -62,6 +62,26 @@ class Database:
 
                 CREATE INDEX IF NOT EXISTS idx_audit_created_at
                     ON audit_log(created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS system_metrics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    cpu_percent REAL NOT NULL,
+                    memory_percent REAL NOT NULL,
+                    load_one REAL NOT NULL,
+                    disk_percent REAL NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_system_metrics_created_at
+                    ON system_metrics(created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS operation_confirmations (
+                    token_hash TEXT PRIMARY KEY,
+                    action TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL
+                );
                 """
             )
 
@@ -147,3 +167,89 @@ class Database:
                 "SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (safe_limit,)
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def record_system_metrics(
+        self,
+        *,
+        cpu_percent: float,
+        memory_percent: float,
+        load_one: float,
+        disk_percent: float,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO system_metrics (
+                    created_at, cpu_percent, memory_percent, load_one, disk_percent
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    _utc_now().isoformat(),
+                    cpu_percent,
+                    memory_percent,
+                    load_one,
+                    disk_percent,
+                ),
+            )
+            connection.execute(
+                """
+                DELETE FROM system_metrics
+                WHERE id NOT IN (
+                    SELECT id FROM system_metrics ORDER BY id DESC LIMIT 1440
+                )
+                """
+            )
+
+    def list_system_metrics(self, limit: int = 120) -> list[dict[str, Any]]:
+        safe_limit = max(1, min(limit, 1440))
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT created_at, cpu_percent, memory_percent, load_one, disk_percent
+                FROM system_metrics ORDER BY id DESC LIMIT ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+        return [dict(row) for row in reversed(rows)]
+
+    def create_confirmation(self, action: str, target: str, minutes: int = 5) -> str:
+        token = secrets.token_urlsafe(24)
+        now = _utc_now()
+        expires_at = now + timedelta(minutes=max(1, min(minutes, 15)))
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM operation_confirmations WHERE expires_at <= ?",
+                (now.isoformat(),),
+            )
+            connection.execute(
+                """
+                INSERT INTO operation_confirmations (
+                    token_hash, action, target, created_at, expires_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    token_digest(token),
+                    action,
+                    target,
+                    now.isoformat(),
+                    expires_at.isoformat(),
+                ),
+            )
+        return token
+
+    def consume_confirmation(self, token: str, action: str, target: str) -> bool:
+        now = _utc_now().isoformat()
+        digest = token_digest(token)
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM operation_confirmations WHERE expires_at <= ?",
+                (now,),
+            )
+            deleted = connection.execute(
+                """
+                DELETE FROM operation_confirmations
+                WHERE token_hash = ? AND action = ? AND target = ? AND expires_at > ?
+                """,
+                (digest, action, target, now),
+            )
+        return deleted.rowcount == 1
