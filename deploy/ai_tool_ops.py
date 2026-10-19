@@ -1318,7 +1318,16 @@ def mount_device(device: str, mount_point: str, persist: bool) -> dict[str, Any]
         if not uuid:
             raise OpsFailure("无法读取分区 UUID，不能写入 fstab")
         _fstab_add(uuid, mount_point, partition["fstype"])
-    result = run([MOUNT, "--source", device, "--target", mount_point], timeout=60)
+    # Mount through a systemd mount unit when available: a plain mount(8) call
+    # leaves FUSE daemons (ntfs-3g) inside the ai-tool.service cgroup, and every
+    # service restart would kill the daemon and drop the mount. systemd-mount
+    # gives the mount its own unit owned by PID 1, immune to our restarts.
+    systemd_mount = shutil.which("systemd-mount")
+    if systemd_mount:
+        command = [systemd_mount, "--no-block", device, mount_point]
+    else:
+        command = [MOUNT, "--source", device, "--target", mount_point]
+    result = run(command, timeout=60)
     if result.returncode != 0:
         if persist:
             _fstab_remove(mount_point)
@@ -1337,7 +1346,10 @@ def umount_device(mount_point: str) -> dict[str, Any]:
     if mounted.returncode != 0 or not mounted.stdout.strip():
         raise OpsFailure("该路径当前不是挂载点")
     source = mounted.stdout.strip().splitlines()[0]
-    result = run([UMOUNT, mount_point], timeout=60)
+    systemd_mount = shutil.which("systemd-mount")
+    result = run([systemd_mount, "--umount", mount_point], timeout=60) if systemd_mount else None
+    if result is None or result.returncode != 0:
+        result = run([UMOUNT, mount_point], timeout=60)
     if result.returncode != 0:
         raise OpsFailure((result.stderr or result.stdout).strip()[-1000:] or "卸载失败")
     message = f"{source} 已从 {mount_point} 卸载"
