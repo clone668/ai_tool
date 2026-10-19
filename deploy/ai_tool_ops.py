@@ -76,7 +76,7 @@ SHARE_BACKUP_DIR = Path("/etc/ai-tool/backups/shares")
 SHARE_INCLUDE_LINE = "include = /etc/samba/ai-tool-shares.conf"
 SHARE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 SHARE_USER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
-SHARE_PATH_ROOTS = ("/data", "/srv", "/home")
+SHARE_PATH_ROOTS = ("/data", "/srv", "/home", "/mnt", "/media")
 SHARE_SPECIAL_SECTIONS = {"global", "homes", "printers", "print$"}
 WEB_STATE_PATH = Path("/etc/ai-tool/web-services.json")
 WEB_BACKUP_DIR = Path("/etc/ai-tool/backups/web")
