@@ -133,6 +133,12 @@ export const api = {
       headers: { 'X-CSRF-Token': csrfToken },
       body: JSON.stringify({ mount_point: mountPoint }),
     }),
+  storageFormat: (csrfToken: string, device: string, fstype: string, label: string) =>
+    request<{ ok: boolean; message: string }>('/api/storage/format', {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': csrfToken },
+      body: JSON.stringify({ device, fstype, label }),
+    }),
   maintenance: () => request<MaintenanceDetails>('/api/maintenance'),
   maintenanceAction: (csrfToken: string, action: string, confirmationToken: string) =>
     request<{ ok: boolean; message: string }>('/api/maintenance/actions', {

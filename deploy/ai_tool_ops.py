@@ -51,6 +51,9 @@ DU = "/usr/bin/du"
 MOUNT = "/usr/bin/mount"
 UMOUNT = "/usr/bin/umount"
 FINDMNT = "/usr/bin/findmnt"
+WIPEFS = "/usr/sbin/wipefs"
+MKFS_COMMANDS = {"ext4": "/usr/sbin/mkfs.ext4", "xfs": "/usr/sbin/mkfs.xfs"}
+FORMAT_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9._-]{0,16}$")
 MOUNT_DEVICE_PATTERN = re.compile(r"^/dev/[A-Za-z0-9._/-]{1,63}$")
 MOUNT_POINT_PATTERN = re.compile(r"^/(?:mnt|media)/[A-Za-z0-9._-]{1,64}$")
 STORAGE_SCAN_ROOTS = (
@@ -1267,6 +1270,65 @@ def umount_device(mount_point: str) -> dict[str, Any]:
     return {"ok": True, "message": f"{source} 已从 {mount_point} 卸载"}
 
 
+def _lsblk_tree() -> list[dict[str, Any]]:
+    lsblk = run(
+        [LSBLK, "-J", "-b", "-o", "NAME,PATH,TYPE,SIZE,FSTYPE,LABEL,MOUNTPOINTS"],
+        timeout=20,
+    )
+    try:
+        return json.loads(lsblk.stdout).get("blockdevices", [])
+    except json.JSONDecodeError:
+        return []
+
+
+def _node_mountpoints(node: dict[str, Any]) -> list[str]:
+    points = [
+        str(item)
+        for item in (node.get("mountpoints") or [])
+        if isinstance(item, str) and item
+    ]
+    for child in node.get("children") or []:
+        if isinstance(child, dict):
+            points.extend(_node_mountpoints(child))
+    return points
+
+
+def format_device(device: str, fstype: str, label: str) -> dict[str, Any]:
+    _require_pattern(device, MOUNT_DEVICE_PATTERN, "format device")
+    if fstype not in MKFS_COMMANDS:
+        raise OpsFailure("filesystem type is not allowed")
+    if not FORMAT_LABEL_PATTERN.fullmatch(label):
+        raise OpsFailure("invalid filesystem label")
+    tree = _lsblk_tree()
+    parent: dict[str, Any] | None = None
+    target: dict[str, Any] | None = None
+    for disk in tree:
+        for child in disk.get("children") or []:
+            if isinstance(child, dict) and child.get("path") == device:
+                parent, target = disk, child
+                break
+        if target is not None:
+            break
+    if target is None or parent is None:
+        raise OpsFailure("设备不存在或不是磁盘分区")
+    if parent.get("type") != "disk":
+        raise OpsFailure("只允许格式化整盘下的分区")
+    if _node_mountpoints(parent):
+        raise OpsFailure("该磁盘上仍有挂载中的分区，全部卸载后才能格式化")
+    wipe = run([WIPEFS, "-a", device], timeout=60)
+    if wipe.returncode != 0:
+        raise OpsFailure((wipe.stderr or wipe.stdout).strip()[-1000:] or "清除分区签名失败")
+    force_flag = "-F" if fstype == "ext4" else "-f"
+    command = [MKFS_COMMANDS[fstype], "-q", force_flag]
+    if label:
+        command += ["-L", label]
+    command.append(device)
+    result = run(command, timeout=300)
+    if result.returncode != 0:
+        raise OpsFailure((result.stderr or result.stdout).strip()[-1000:] or "格式化失败")
+    return {"ok": True, "message": f"{device} 已格式化为 {fstype}"}
+
+
 def _validate_scan_path(raw_path: str) -> str:
     _require_pattern(raw_path, STORAGE_PATH_PATTERN, "scan path")
     resolved = Path(raw_path).resolve(strict=False)
@@ -2475,6 +2537,11 @@ def build_parser() -> argparse.ArgumentParser:
     storage_umount_parser = subparsers.add_parser("storage-umount")
     storage_umount_parser.add_argument("mount_point")
 
+    storage_format_parser = subparsers.add_parser("storage-format")
+    storage_format_parser.add_argument("device")
+    storage_format_parser.add_argument("fstype", choices=["ext4", "xfs"])
+    storage_format_parser.add_argument("label", nargs="?", default="")
+
     subparsers.add_parser("maintenance-scan")
 
     maintenance_action_parser = subparsers.add_parser("maintenance-action")
@@ -2554,6 +2621,8 @@ def main() -> int:
             print(_json_output(mount_device(args.device, args.mount_point)))
         elif args.command == "storage-umount":
             print(_json_output(umount_device(args.mount_point)))
+        elif args.command == "storage-format":
+            print(_json_output(format_device(args.device, args.fstype, args.label)))
         elif args.command == "maintenance-scan":
             print(_json_output(maintenance_scan()))
         elif args.command == "maintenance-action":

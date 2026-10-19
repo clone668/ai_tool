@@ -44,6 +44,10 @@ def test_privileged_helper_exposes_only_structured_management_commands() -> None
     assert mount_args.device == "/dev/sda1"
     assert mount_args.mount_point == "/mnt/sda1"
     assert parser.parse_args(["storage-umount", "/mnt/sda1"]).mount_point == "/mnt/sda1"
+    format_args = parser.parse_args(["storage-format", "/dev/sdz9", "ext4", "data4t"])
+    assert format_args.device == "/dev/sdz9"
+    assert format_args.fstype == "ext4"
+    assert format_args.label == "data4t"
     assert parser.parse_args(["share-inventory"]).command == "share-inventory"
     share_args = parser.parse_args(["share-action", "media", "disable"])
     assert share_args.share_id == "media"
@@ -82,6 +86,20 @@ def test_mount_validation_rejects_unsafe_targets() -> None:
             umount_device(point)
     with pytest.raises(OpsFailure, match="mount point"):
         umount_device("/mnt/../../data")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="helper targets Linux")
+def test_format_validation_rejects_unsafe_targets() -> None:
+    from deploy.ai_tool_ops import OpsFailure, format_device
+
+    with pytest.raises(OpsFailure, match="format device"):
+        format_device("sdd1", "ext4", "")
+    with pytest.raises(OpsFailure, match="format device"):
+        format_device("/dev/sdd1; mkfs", "ext4", "")
+    with pytest.raises(OpsFailure, match="filesystem type"):
+        format_device("/dev/sdz9", "ntfs", "")
+    with pytest.raises(OpsFailure, match="label"):
+        format_device("/dev/sdz9", "ext4", "bad label;")
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="helper targets Linux")

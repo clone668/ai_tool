@@ -469,6 +469,11 @@ class OpsClient:
             return {"ok": True, "message": f"演示模式：{mount_point} 已卸载"}
         return self._json_command("storage-umount", mount_point, timeout=90)
 
+    def storage_format(self, device: str, fstype: str, label: str) -> dict[str, Any]:
+        if self.settings.demo:
+            return {"ok": True, "message": f"演示模式：{device} 已格式化为 {fstype}"}
+        return self._json_command("storage-format", device, fstype, label, timeout=360)
+
     def share_inventory(self) -> dict[str, Any]:
         if self.settings.demo:
             return {

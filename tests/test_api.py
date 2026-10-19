@@ -132,6 +132,24 @@ def test_management_inventory_endpoints(demo_settings) -> None:
         )
         assert bad_mount.status_code == 422
 
+        formatted = client.post(
+            "/api/storage/format",
+            json={"device": "/dev/sdb1", "fstype": "ext4", "label": "data"},
+            headers={"X-CSRF-Token": session["csrf_token"]},
+        )
+        assert formatted.status_code == 200
+        denied_format = client.post(
+            "/api/storage/format",
+            json={"device": "/dev/sdb1", "fstype": "ext4"},
+        )
+        assert denied_format.status_code == 403
+        bad_format = client.post(
+            "/api/storage/format",
+            json={"device": "/dev/sdb1", "fstype": "ntfs"},
+            headers={"X-CSRF-Token": session["csrf_token"]},
+        )
+        assert bad_format.status_code == 422
+
         scan = client.get("/api/storage/scan?path=/data").json()
         assert scan["entries"]
         assert client.get("/api/storage/scan?path=/data/../etc").status_code == 400

@@ -117,6 +117,12 @@ class StorageUmountRequest(BaseModel):
     mount_point: str = Field(pattern=r"^/(mnt|media)/[A-Za-z0-9._-]{1,64}$")
 
 
+class StorageFormatRequest(BaseModel):
+    device: str = Field(pattern=r"^/dev/[A-Za-z0-9._/-]{1,63}$")
+    fstype: Literal["ext4", "xfs"] = "ext4"
+    label: str = Field(default="", max_length=16, pattern=r"^[A-Za-z0-9._-]*$")
+
+
 def _client_ip(request: Request | WebSocket) -> str:
     return request.client.host if request.client else "unknown"
 
@@ -530,6 +536,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             detail=f"卸载 {payload.mount_point}",
             component_id=payload.mount_point,
             operation=lambda: ops.storage_umount(payload.mount_point),
+        )
+
+    @app.post("/api/storage/format")
+    def storage_format(
+        payload: StorageFormatRequest,
+        request: Request,
+        session: Annotated[dict[str, Any], Depends(require_csrf)],
+    ) -> dict[str, Any]:
+        return audited_operation(
+            request=request,
+            session=session,
+            action="storage.format",
+            detail=f"格式化 {payload.device} 为 {payload.fstype}",
+            component_id=payload.device,
+            operation=lambda: ops.storage_format(payload.device, payload.fstype, payload.label),
         )
 
     @app.get("/api/maintenance")

@@ -1982,3 +1982,19 @@ pre:focus-visible {
 }
 
 .mount-point-field input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.partition-actions { display: inline-flex; gap: 6px; }
+
+.format-fields { display: flex; gap: 12px; flex-wrap: wrap; width: 100%; }
+
+.format-fields .mount-point-field { flex: 1 1 180px; }
+
+.mount-point-field select {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-family: inherit;
+  background: var(--panel);
+  color: var(--text);
+}

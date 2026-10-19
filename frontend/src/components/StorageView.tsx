@@ -4,6 +4,7 @@ import {
   Database,
   Disc3,
   FolderSearch,
+  Eraser,
   HardDrive,
   HardDriveDownload,
   HardDriveUpload,
@@ -26,6 +27,7 @@ interface StorageViewProps {
 type MountPending =
   | { kind: 'mount'; partition: StoragePartition }
   | { kind: 'umount'; partition: StoragePartition; mountPoint: string }
+  | { kind: 'format'; partition: StoragePartition }
 
 type StorageTab = 'filesystems' | 'disks' | 'scan'
 
@@ -46,11 +48,19 @@ export function StorageView({ csrfToken, onError, onSuccess }: StorageViewProps)
   const [scanning, setScanning] = useState(false)
   const [pending, setPending] = useState<MountPending | null>(null)
   const [mountPointInput, setMountPointInput] = useState('')
+  const [formatFs, setFormatFs] = useState<'ext4' | 'xfs'>('ext4')
+  const [formatLabel, setFormatLabel] = useState('')
   const [mountBusy, setMountBusy] = useState(false)
 
   const openMountDialog = (partition: StoragePartition) => {
     setMountPointInput(`/mnt/${partition.name}`)
     setPending({ kind: 'mount', partition })
+  }
+
+  const openFormatDialog = (partition: StoragePartition) => {
+    setFormatFs('ext4')
+    setFormatLabel(partition.label ?? '')
+    setPending({ kind: 'format', partition })
   }
 
   const loadStorage = useCallback(async () => {
@@ -88,19 +98,21 @@ export function StorageView({ csrfToken, onError, onSuccess }: StorageViewProps)
     try {
       const result = pending.kind === 'mount'
         ? await api.storageMount(csrfToken, pending.partition.path, mountPointInput.trim())
-        : await api.storageUmount(csrfToken, pending.mountPoint)
+        : pending.kind === 'umount'
+          ? await api.storageUmount(csrfToken, pending.mountPoint)
+          : await api.storageFormat(csrfToken, pending.partition.path, formatFs, formatLabel.trim())
       onSuccess(result.message)
       setPending(null)
       await loadStorage()
     } catch (error) {
       onError(
-        error instanceof Error ? error.message : '挂载操作失败',
+        error instanceof Error ? error.message : '磁盘操作失败',
         error instanceof ApiError && error.status === 401,
       )
     } finally {
       setMountBusy(false)
     }
-  }, [pending, csrfToken, mountPointInput, onSuccess, onError, loadStorage])
+  }, [pending, csrfToken, mountPointInput, formatFs, formatLabel, onSuccess, onError, loadStorage])
 
   useEffect(() => {
     void loadStorage()
@@ -204,7 +216,10 @@ export function StorageView({ csrfToken, onError, onSuccess }: StorageViewProps)
                 <td className="mono-cell">{partition.mountpoints.length ? partition.mountpoints.join(' / ') : <span className="usage-value">未挂载</span>}</td>
                 <td>
                   {!primaryMount ? (
-                    <button className="icon-button" onClick={() => openMountDialog(partition)} title="挂载分区" aria-label={`挂载 ${partition.path}`}><HardDriveDownload size={16} /></button>
+                    <span className="partition-actions">
+                      <button className="icon-button" onClick={() => openMountDialog(partition)} title="挂载分区" aria-label={`挂载 ${partition.path}`}><HardDriveDownload size={16} /></button>
+                      <button className="icon-button danger-icon" onClick={() => openFormatDialog(partition)} title="格式化分区（清除全部数据）" aria-label={`格式化 ${partition.path}`}><Eraser size={16} /></button>
+                    </span>
                   ) : managedMount ? (
                     <button className="icon-button danger-icon" onClick={() => setPending({ kind: 'umount', partition, mountPoint: managedMount })} title="卸载分区" aria-label={`卸载 ${managedMount}`}><HardDriveUpload size={16} /></button>
                   ) : <span className="usage-value">系统挂载</span>}
@@ -268,6 +283,37 @@ export function StorageView({ csrfToken, onError, onSuccess }: StorageViewProps)
               required
             />
           </label>
+        </OperationDialog>
+      )}
+      {pending?.kind === 'format' && (
+        <OperationDialog
+          title="确认格式化分区"
+          target={`${pending.partition.path}（${formatBytes(pending.partition.size)}，当前 ${pending.partition.fstype}）`}
+          description="分区上的全部数据将被永久清除，不可恢复。若该磁盘还有挂载中的其他分区，服务端会拒绝执行。"
+          confirmLabel="格式化"
+          tone="danger"
+          busy={mountBusy}
+          onClose={() => setPending(null)}
+          onConfirm={() => void confirmMountAction()}
+        >
+          <div className="format-fields">
+            <label className="mount-point-field">
+              <span>文件系统</span>
+              <select value={formatFs} onChange={(event) => setFormatFs(event.target.value as 'ext4' | 'xfs')}>
+                <option value="ext4">ext4（推荐）</option>
+                <option value="xfs">xfs</option>
+              </select>
+            </label>
+            <label className="mount-point-field">
+              <span>卷标（可选，字母数字，最多 16 位）</span>
+              <input
+                value={formatLabel}
+                onChange={(event) => setFormatLabel(event.target.value)}
+                maxLength={16}
+                pattern="[A-Za-z0-9._-]*"
+              />
+            </label>
+          </div>
         </OperationDialog>
       )}
       {pending?.kind === 'umount' && (
