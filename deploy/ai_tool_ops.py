@@ -1254,6 +1254,14 @@ def _fstab_add(uuid: str, mount_point: str, fstype: str) -> None:
     for line in lines:
         fields = line.split()
         if len(fields) >= 2 and fields[1] == mount_point and not line.strip().startswith("#"):
+            # Idempotent: the panel already wrote this exact entry (e.g. the
+            # mount was dropped externally and the user re-mounts from the UI).
+            if (
+                line.rstrip().endswith(FSTAB_MARK)
+                and fields[0] == f"UUID={uuid}"
+                and fields[2] == fstype
+            ):
+                return
             raise OpsFailure(f"fstab 中已存在 {mount_point} 的挂载记录，请先人工处理")
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     backup_dir = Path("/etc/ai-tool/backups")
