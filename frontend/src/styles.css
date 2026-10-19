@@ -1960,3 +1960,25 @@ pre:focus-visible {
 }
 
 .scan-share span { color: var(--subtle); font-size: 10px; white-space: nowrap; }
+
+.mount-point-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+}
+
+.mount-point-field span { color: var(--subtle); font-size: 12px; }
+
+.mount-point-field input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-family: inherit;
+  background: var(--panel);
+  color: var(--text);
+}
+
+.mount-point-field input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }

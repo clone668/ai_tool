@@ -106,6 +106,31 @@ def test_management_inventory_endpoints(demo_settings) -> None:
         storage = client.get("/api/storage").json()
         assert storage["disks"][0]["smart"]["passed"] is True
         assert storage["filesystems"][1]["mountpoint"] == "/data"
+        assert storage["partitions"][1]["mountpoints"] == []
+
+        mounted = client.post(
+            "/api/storage/mount",
+            json={"device": "/dev/sdb1", "mount_point": "/mnt/sdb1"},
+            headers={"X-CSRF-Token": session["csrf_token"]},
+        )
+        assert mounted.status_code == 200
+        umounted = client.post(
+            "/api/storage/umount",
+            json={"mount_point": "/mnt/sdb1"},
+            headers={"X-CSRF-Token": session["csrf_token"]},
+        )
+        assert umounted.status_code == 200
+        denied_mount = client.post(
+            "/api/storage/mount",
+            json={"device": "/dev/sdb1", "mount_point": "/mnt/sdb1"},
+        )
+        assert denied_mount.status_code == 403
+        bad_mount = client.post(
+            "/api/storage/mount",
+            json={"device": "/dev/sdb1", "mount_point": "/etc/x"},
+            headers={"X-CSRF-Token": session["csrf_token"]},
+        )
+        assert bad_mount.status_code == 422
 
         scan = client.get("/api/storage/scan?path=/data").json()
         assert scan["entries"]

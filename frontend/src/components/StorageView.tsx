@@ -5,6 +5,8 @@ import {
   Disc3,
   FolderSearch,
   HardDrive,
+  HardDriveDownload,
+  HardDriveUpload,
   LoaderCircle,
   RefreshCw,
   ShieldCheck,
@@ -12,11 +14,18 @@ import {
 } from 'lucide-react'
 import { api, ApiError } from '../api'
 import { formatBytes } from '../format'
-import type { StorageDetails, StorageScan } from '../types'
+import { OperationDialog } from './OperationDialog'
+import type { StorageDetails, StoragePartition, StorageScan } from '../types'
 
 interface StorageViewProps {
+  csrfToken: string
   onError: (message: string, unauthorized?: boolean) => void
+  onSuccess: (message: string) => void
 }
+
+type MountPending =
+  | { kind: 'mount'; partition: StoragePartition }
+  | { kind: 'umount'; partition: StoragePartition; mountPoint: string }
 
 type StorageTab = 'filesystems' | 'disks' | 'scan'
 
@@ -28,13 +37,21 @@ function percentClass(value: number) {
   return 'healthy'
 }
 
-export function StorageView({ onError }: StorageViewProps) {
+export function StorageView({ csrfToken, onError, onSuccess }: StorageViewProps) {
   const [details, setDetails] = useState<StorageDetails | null>(null)
   const [loading, setLoading] = useState(false)
   const [tab, setTab] = useState<StorageTab>('filesystems')
   const [scanPath, setScanPath] = useState('/data')
   const [scan, setScan] = useState<StorageScan | null>(null)
   const [scanning, setScanning] = useState(false)
+  const [pending, setPending] = useState<MountPending | null>(null)
+  const [mountPointInput, setMountPointInput] = useState('')
+  const [mountBusy, setMountBusy] = useState(false)
+
+  const openMountDialog = (partition: StoragePartition) => {
+    setMountPointInput(`/mnt/${partition.name}`)
+    setPending({ kind: 'mount', partition })
+  }
 
   const loadStorage = useCallback(async () => {
     setLoading(true)
@@ -64,6 +81,26 @@ export function StorageView({ onError }: StorageViewProps) {
       setScanning(false)
     }
   }, [onError])
+
+  const confirmMountAction = useCallback(async () => {
+    if (!pending) return
+    setMountBusy(true)
+    try {
+      const result = pending.kind === 'mount'
+        ? await api.storageMount(csrfToken, pending.partition.path, mountPointInput.trim())
+        : await api.storageUmount(csrfToken, pending.mountPoint)
+      onSuccess(result.message)
+      setPending(null)
+      await loadStorage()
+    } catch (error) {
+      onError(
+        error instanceof Error ? error.message : '挂载操作失败',
+        error instanceof ApiError && error.status === 401,
+      )
+    } finally {
+      setMountBusy(false)
+    }
+  }, [pending, csrfToken, mountPointInput, onSuccess, onError, loadStorage])
 
   useEffect(() => {
     void loadStorage()
@@ -153,6 +190,29 @@ export function StorageView({ onError }: StorageViewProps) {
             </tr>)}
           </tbody></table></div>
         ) : <div className="empty-inline">未检测到物理磁盘</div>}
+        <div className="section-heading secondary-heading"><HardDriveDownload size={18} /><div><strong>分区与挂载</strong><span>挂载点仅允许 /mnt 或 /media 下的目录</span></div></div>
+        {details.partitions.length ? (
+          <div className="table-scroll"><table className="management-table"><thead><tr><th>分区</th><th>标签</th><th>格式</th><th>容量</th><th>挂载点</th><th>操作</th></tr></thead><tbody>
+            {details.partitions.map((partition) => {
+              const primaryMount = partition.mountpoints[0] ?? null
+              const managedMount = partition.mountpoints.find((point) => /^\/(mnt|media)\//.test(point)) ?? null
+              return <tr key={partition.path}>
+                <td className="mono-cell"><strong>{partition.path}</strong></td>
+                <td>{partition.label ?? '—'}</td>
+                <td>{partition.fstype}</td>
+                <td>{formatBytes(partition.size)}</td>
+                <td className="mono-cell">{partition.mountpoints.length ? partition.mountpoints.join(' / ') : <span className="usage-value">未挂载</span>}</td>
+                <td>
+                  {!primaryMount ? (
+                    <button className="icon-button" onClick={() => openMountDialog(partition)} title="挂载分区" aria-label={`挂载 ${partition.path}`}><HardDriveDownload size={16} /></button>
+                  ) : managedMount ? (
+                    <button className="icon-button danger-icon" onClick={() => setPending({ kind: 'umount', partition, mountPoint: managedMount })} title="卸载分区" aria-label={`卸载 ${managedMount}`}><HardDriveUpload size={16} /></button>
+                  ) : <span className="usage-value">系统挂载</span>}
+                </td>
+              </tr>
+            })}
+          </tbody></table></div>
+        ) : <div className="empty-inline">未检测到带文件系统的分区</div>}
       </div>}
 
       {tab === 'scan' && <div className="resource-section">
@@ -188,6 +248,40 @@ export function StorageView({ onError }: StorageViewProps) {
           </tbody></table></div>
         ) : <div className="empty-inline">该目录为空或不可读</div>)}
       </div>}
+
+      {pending?.kind === 'mount' && (
+        <OperationDialog
+          title="确认挂载分区"
+          target={pending.partition.path}
+          description="挂载不会写入 fstab，重启后如需自动挂载请另行配置。"
+          confirmLabel="挂载"
+          busy={mountBusy}
+          onClose={() => setPending(null)}
+          onConfirm={() => void confirmMountAction()}
+        >
+          <label className="mount-point-field">
+            <span>挂载点（/mnt 或 /media 下的空目录）</span>
+            <input
+              value={mountPointInput}
+              onChange={(event) => setMountPointInput(event.target.value)}
+              pattern="/(mnt|media)/[A-Za-z0-9._-]{1,64}"
+              required
+            />
+          </label>
+        </OperationDialog>
+      )}
+      {pending?.kind === 'umount' && (
+        <OperationDialog
+          title="确认卸载分区"
+          target={`${pending.partition.path} / ${pending.mountPoint}`}
+          description="卸载后该目录下的数据将不可访问，请确认没有程序正在使用。"
+          confirmLabel="卸载"
+          tone="danger"
+          busy={mountBusy}
+          onClose={() => setPending(null)}
+          onConfirm={() => void confirmMountAction()}
+        />
+      )}
     </section>
   )
 }

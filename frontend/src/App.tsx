@@ -232,7 +232,11 @@ export default function App() {
           ) : activeView === 'system' ? (
             <SystemView onError={handleViewError} />
           ) : activeView === 'storage' ? (
-            <StorageView onError={handleViewError} />
+            <StorageView
+              csrfToken={session.csrf_token}
+              onError={handleViewError}
+              onSuccess={(message) => showToast(message, 'success')}
+            />
           ) : activeView === 'shares' ? (
             <SharesView
               csrfToken={session.csrf_token}

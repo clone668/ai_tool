@@ -121,6 +121,18 @@ export const api = {
   storageScan: (path: string) => request<StorageScan>(
     `/api/storage/scan?path=${encodeURIComponent(path)}`,
   ),
+  storageMount: (csrfToken: string, device: string, mountPoint: string) =>
+    request<{ ok: boolean; message: string }>('/api/storage/mount', {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': csrfToken },
+      body: JSON.stringify({ device, mount_point: mountPoint }),
+    }),
+  storageUmount: (csrfToken: string, mountPoint: string) =>
+    request<{ ok: boolean; message: string }>('/api/storage/umount', {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': csrfToken },
+      body: JSON.stringify({ mount_point: mountPoint }),
+    }),
   maintenance: () => request<MaintenanceDetails>('/api/maintenance'),
   maintenanceAction: (csrfToken: string, action: string, confirmationToken: string) =>
     request<{ ok: boolean; message: string }>('/api/maintenance/actions', {

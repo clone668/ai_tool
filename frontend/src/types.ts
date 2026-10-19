@@ -260,10 +260,20 @@ export interface SwapDevice {
   priority: number
 }
 
+export interface StoragePartition {
+  name: string
+  path: string
+  fstype: string
+  label: string | null
+  size: number
+  mountpoints: string[]
+}
+
 export interface StorageDetails {
   generated_at: string
   filesystems: FilesystemState[]
   disks: StorageDisk[]
+  partitions: StoragePartition[]
   swap: SwapDevice[]
   smart_available: boolean
 }

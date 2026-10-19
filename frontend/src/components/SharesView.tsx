@@ -153,7 +153,7 @@ export function SharesView({ csrfToken, onError, onSuccess }: SharesViewProps) {
       </div>
 
       {inventory?.discovered.length ? <div className="resource-section">
-        <div className="section-heading secondary-heading"><FolderOpen size={18} /><div><strong>外部共享</strong><span>smb.conf 中手动配置，面板只读</span></div></div>
+        <div className="section-heading secondary-heading"><FolderOpen size={18} /><div><strong>外部共享</strong><span>来自 smb.conf / Samba registry 的现有配置，面板只读</span></div></div>
         <div className="table-scroll"><table className="management-table"><thead><tr><th>名称</th><th>目录</th><th>说明</th><th>权限</th><th>管理</th></tr></thead><tbody>
           {inventory.discovered.map((share) => <tr key={share.name}>
             <td><strong>{share.name}</strong></td>

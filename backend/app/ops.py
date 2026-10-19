@@ -408,6 +408,24 @@ class OpsClient:
                         },
                     },
                 ],
+                "partitions": [
+                    {
+                        "name": "sda1",
+                        "path": "/dev/sda1",
+                        "fstype": "ext4",
+                        "label": "data",
+                        "size": 200 * 1024**3,
+                        "mountpoints": ["/data"],
+                    },
+                    {
+                        "name": "sdb1",
+                        "path": "/dev/sdb1",
+                        "fstype": "ext4",
+                        "label": None,
+                        "size": 1024**4,
+                        "mountpoints": [],
+                    },
+                ],
                 "swap": [
                     {
                         "name": "/swapfile",
@@ -440,6 +458,16 @@ class OpsClient:
                 ],
             }
         return self._json_command("storage-scan", path, timeout=200)
+
+    def storage_mount(self, device: str, mount_point: str) -> dict[str, Any]:
+        if self.settings.demo:
+            return {"ok": True, "message": f"演示模式：{device} 已挂载到 {mount_point}"}
+        return self._json_command("storage-mount", device, mount_point, timeout=90)
+
+    def storage_umount(self, mount_point: str) -> dict[str, Any]:
+        if self.settings.demo:
+            return {"ok": True, "message": f"演示模式：{mount_point} 已卸载"}
+        return self._json_command("storage-umount", mount_point, timeout=90)
 
     def share_inventory(self) -> dict[str, Any]:
         if self.settings.demo:

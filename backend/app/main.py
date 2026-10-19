@@ -108,6 +108,15 @@ class ShareActionRequest(BaseModel):
     action: Literal["enable", "disable", "delete", "reload"]
 
 
+class StorageMountRequest(BaseModel):
+    device: str = Field(pattern=r"^/dev/[A-Za-z0-9._/-]{1,63}$")
+    mount_point: str = Field(pattern=r"^/(mnt|media)/[A-Za-z0-9._-]{1,64}$")
+
+
+class StorageUmountRequest(BaseModel):
+    mount_point: str = Field(pattern=r"^/(mnt|media)/[A-Za-z0-9._-]{1,64}$")
+
+
 def _client_ip(request: Request | WebSocket) -> str:
     return request.client.host if request.client else "unknown"
 
@@ -492,6 +501,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return ops.storage_scan(path)
         except OpsError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+    @app.post("/api/storage/mount")
+    def storage_mount(
+        payload: StorageMountRequest,
+        request: Request,
+        session: Annotated[dict[str, Any], Depends(require_csrf)],
+    ) -> dict[str, Any]:
+        return audited_operation(
+            request=request,
+            session=session,
+            action="storage.mount",
+            detail=f"挂载 {payload.device} 到 {payload.mount_point}",
+            component_id=payload.device,
+            operation=lambda: ops.storage_mount(payload.device, payload.mount_point),
+        )
+
+    @app.post("/api/storage/umount")
+    def storage_umount(
+        payload: StorageUmountRequest,
+        request: Request,
+        session: Annotated[dict[str, Any], Depends(require_csrf)],
+    ) -> dict[str, Any]:
+        return audited_operation(
+            request=request,
+            session=session,
+            action="storage.umount",
+            detail=f"卸载 {payload.mount_point}",
+            component_id=payload.mount_point,
+            operation=lambda: ops.storage_umount(payload.mount_point),
+        )
 
     @app.get("/api/maintenance")
     def maintenance_information(

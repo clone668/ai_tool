@@ -48,6 +48,11 @@ LSBLK = "/usr/bin/lsblk"
 DF = "/usr/bin/df"
 SS = "/usr/bin/ss"
 DU = "/usr/bin/du"
+MOUNT = "/usr/bin/mount"
+UMOUNT = "/usr/bin/umount"
+FINDMNT = "/usr/bin/findmnt"
+MOUNT_DEVICE_PATTERN = re.compile(r"^/dev/[A-Za-z0-9._/-]{1,63}$")
+MOUNT_POINT_PATTERN = re.compile(r"^/(?:mnt|media)/[A-Za-z0-9._-]{1,64}$")
 STORAGE_SCAN_ROOTS = (
     "/data",
     "/etc",
@@ -1178,9 +1183,88 @@ def storage_details() -> dict[str, Any]:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "filesystems": _filesystem_details(),
         "disks": disks,
+        "partitions": _partition_details(),
         "swap": _swap_details(),
         "smart_available": bool(shutil.which("smartctl")),
     }
+
+
+def _partition_details() -> list[dict[str, Any]]:
+    lsblk = run(
+        [LSBLK, "-J", "-b", "-o", "NAME,PATH,TYPE,SIZE,FSTYPE,LABEL,MOUNTPOINTS"],
+        timeout=20,
+    )
+    try:
+        devices = json.loads(lsblk.stdout).get("blockdevices", [])
+    except json.JSONDecodeError:
+        return []
+    partitions: list[dict[str, Any]] = []
+
+    def walk(node: dict[str, Any]) -> None:
+        if node.get("type") in {"part", "crypt", "lvm"} and node.get("fstype"):
+            mountpoints = [
+                str(item)
+                for item in (node.get("mountpoints") or [])
+                if isinstance(item, str) and item
+            ]
+            partitions.append(
+                {
+                    "name": str(node.get("name") or node.get("path") or ""),
+                    "path": str(node.get("path") or f"/dev/{node.get('name', '')}"),
+                    "fstype": str(node.get("fstype") or ""),
+                    "label": node.get("label") or None,
+                    "size": int(node.get("size") or 0),
+                    "mountpoints": mountpoints,
+                }
+            )
+        for child in node.get("children") or []:
+            if isinstance(child, dict):
+                walk(child)
+
+    for device in devices:
+        if isinstance(device, dict):
+            walk(device)
+    partitions.sort(key=lambda item: item["path"])
+    return partitions
+
+
+def _find_partition(device: str) -> dict[str, Any]:
+    for partition in _partition_details():
+        if partition["path"] == device:
+            return partition
+    raise OpsFailure("设备不存在或不是可挂载的分区")
+
+
+def mount_device(device: str, mount_point: str) -> dict[str, Any]:
+    _require_pattern(device, MOUNT_DEVICE_PATTERN, "mount device")
+    _require_pattern(mount_point, MOUNT_POINT_PATTERN, "mount point")
+    partition = _find_partition(device)
+    if partition["mountpoints"]:
+        raise OpsFailure(f"分区已挂载到 {partition['mountpoints'][0]}")
+    target = Path(mount_point)
+    if target.is_symlink() or (target.exists() and not target.is_dir()):
+        raise OpsFailure("挂载点路径不安全")
+    if target.exists() and any(target.iterdir()):
+        raise OpsFailure("挂载点目录非空，拒绝覆盖挂载")
+    target.mkdir(parents=True, exist_ok=True)
+    result = run([MOUNT, "--source", device, "--target", mount_point], timeout=60)
+    if result.returncode != 0:
+        raise OpsFailure((result.stderr or result.stdout).strip()[-1000:] or "挂载失败")
+    return {"ok": True, "message": f"{device} 已挂载到 {mount_point}"}
+
+
+def umount_device(mount_point: str) -> dict[str, Any]:
+    _require_pattern(mount_point, MOUNT_POINT_PATTERN, "mount point")
+    mounted = run(
+        [FINDMNT, "-n", "-o", "SOURCE", "--mountpoint", mount_point], timeout=15
+    )
+    if mounted.returncode != 0 or not mounted.stdout.strip():
+        raise OpsFailure("该路径当前不是挂载点")
+    source = mounted.stdout.strip().splitlines()[0]
+    result = run([UMOUNT, mount_point], timeout=60)
+    if result.returncode != 0:
+        raise OpsFailure((result.stderr or result.stdout).strip()[-1000:] or "卸载失败")
+    return {"ok": True, "message": f"{source} 已从 {mount_point} 卸载"}
 
 
 def _validate_scan_path(raw_path: str) -> str:
@@ -1348,11 +1432,7 @@ def _samba_apply() -> None:
             raise OpsFailure(message or "smbd reload failed")
 
 
-def _smb_conf_shares() -> list[dict[str, Any]]:
-    try:
-        content = SMB_CONF_PATH.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return []
+def _parse_shares_text(content: str) -> list[dict[str, Any]]:
     shares: list[dict[str, Any]] = []
     current: dict[str, Any] | None = None
     for raw_line in content.splitlines():
@@ -1384,6 +1464,31 @@ def _smb_conf_shares() -> list[dict[str, Any]]:
     return [share for share in shares if share["path"]]
 
 
+def _smb_conf_shares() -> list[dict[str, Any]]:
+    try:
+        content = SMB_CONF_PATH.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    return _parse_shares_text(content)
+
+
+def _effective_shares() -> list[dict[str, Any]]:
+    """Shares actually served by smbd.
+
+    testparm resolves `include` directives (including `include = registry`,
+    where net-conf / CasaOS shares live), so its dump is authoritative.
+    Fall back to parsing smb.conf directly when testparm fails.
+    """
+    testparm = shutil.which("testparm")
+    if testparm:
+        result = run([testparm, "-s", "--suppress-prompt"], timeout=30)
+        if result.returncode == 0 and result.stdout.strip():
+            shares = _parse_shares_text(result.stdout)
+            if shares:
+                return shares
+    return _smb_conf_shares()
+
+
 def share_inventory() -> dict[str, Any]:
     warnings = []
     samba_available = SMB_CONF_PATH.exists() and bool(shutil.which("testparm"))
@@ -1399,7 +1504,7 @@ def share_inventory() -> dict[str, Any]:
     managed_ids = {item["id"] for item in items}
     discovered = [
         {**share, "managed": False}
-        for share in _smb_conf_shares()
+        for share in _effective_shares()
         if share["name"] not in managed_ids
     ]
     smbd_active = run([SYSTEMCTL, "is-active", "smbd.service"], timeout=10).returncode == 0
@@ -2363,6 +2468,13 @@ def build_parser() -> argparse.ArgumentParser:
     storage_scan_parser = subparsers.add_parser("storage-scan")
     storage_scan_parser.add_argument("path")
 
+    storage_mount_parser = subparsers.add_parser("storage-mount")
+    storage_mount_parser.add_argument("device")
+    storage_mount_parser.add_argument("mount_point")
+
+    storage_umount_parser = subparsers.add_parser("storage-umount")
+    storage_umount_parser.add_argument("mount_point")
+
     subparsers.add_parser("maintenance-scan")
 
     maintenance_action_parser = subparsers.add_parser("maintenance-action")
@@ -2438,6 +2550,10 @@ def main() -> int:
             print(_json_output(storage_details()))
         elif args.command == "storage-scan":
             print(_json_output(storage_scan(args.path)))
+        elif args.command == "storage-mount":
+            print(_json_output(mount_device(args.device, args.mount_point)))
+        elif args.command == "storage-umount":
+            print(_json_output(umount_device(args.mount_point)))
         elif args.command == "maintenance-scan":
             print(_json_output(maintenance_scan()))
         elif args.command == "maintenance-action":

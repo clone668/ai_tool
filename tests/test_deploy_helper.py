@@ -40,6 +40,10 @@ def test_privileged_helper_exposes_only_structured_management_commands() -> None
     assert parser.parse_args(["system-details"]).command == "system-details"
     assert parser.parse_args(["storage-details"]).command == "storage-details"
     assert parser.parse_args(["storage-scan", "/data"]).path == "/data"
+    mount_args = parser.parse_args(["storage-mount", "/dev/sda1", "/mnt/sda1"])
+    assert mount_args.device == "/dev/sda1"
+    assert mount_args.mount_point == "/mnt/sda1"
+    assert parser.parse_args(["storage-umount", "/mnt/sda1"]).mount_point == "/mnt/sda1"
     assert parser.parse_args(["share-inventory"]).command == "share-inventory"
     share_args = parser.parse_args(["share-action", "media", "disable"])
     assert share_args.share_id == "media"
@@ -61,6 +65,23 @@ def test_storage_scan_rejects_paths_outside_allowed_roots() -> None:
     for path in ("/proc", "/var/lib/../../proc", "/dev", "/etc/../proc"):
         with pytest.raises(OpsFailure):
             storage_scan(path)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="helper targets Linux")
+def test_mount_validation_rejects_unsafe_targets() -> None:
+    from deploy.ai_tool_ops import OpsFailure, mount_device, umount_device
+
+    with pytest.raises(OpsFailure, match="mount device"):
+        mount_device("/dev/sda1; rm -rf /", "/mnt/x")
+    with pytest.raises(OpsFailure, match="mount device"):
+        mount_device("sda1", "/mnt/x")
+    for point in ("/etc/x", "/data/x", "/mnt/../etc", "/", "/mnt"):
+        with pytest.raises(OpsFailure, match="mount point"):
+            mount_device("/dev/sdz9", point)
+        with pytest.raises(OpsFailure, match="mount point"):
+            umount_device(point)
+    with pytest.raises(OpsFailure, match="mount point"):
+        umount_device("/mnt/../../data")
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="helper targets Linux")
