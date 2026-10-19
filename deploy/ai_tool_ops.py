@@ -1529,20 +1529,24 @@ def _ensure_share_layout() -> None:
         SHARE_MANAGED_PATH.write_text(_render_shares([]), encoding="utf-8")
         os.chmod(SHARE_MANAGED_PATH, 0o644)
     content = SMB_CONF_PATH.read_text(encoding="utf-8", errors="replace")
-    if SHARE_INCLUDE_LINE in content:
-        return
-    lines = content.splitlines()
-    insert_at = next(
-        (index + 1 for index, line in enumerate(lines) if line.strip().lower() == "[global]"),
-        None,
-    )
-    if insert_at is None:
+    if "[global]" not in content.lower():
         raise OpsFailure("smb.conf 缺少 [global] 段，无法接入托管配置")
+    # The managed file contains share sections, which terminate [global], so
+    # the include must be the LAST directive in smb.conf. An include placed
+    # inside [global] (earlier layout) pushes the remaining global lines —
+    # e.g. `include = registry` — into the last share section and testparm
+    # fails with "only effective in global section / Error loading services".
+    lines = content.splitlines()
+    kept = [line for line in lines if line.strip().lower() != SHARE_INCLUDE_LINE]
+    while kept and not kept[-1].strip():
+        kept.pop()
+    desired = kept + [SHARE_INCLUDE_LINE]
+    if lines == desired:
+        return
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     shutil.copy2(SMB_CONF_PATH, SHARE_BACKUP_DIR / f"smb.conf-{timestamp}")
-    lines.insert(insert_at, f"    {SHARE_INCLUDE_LINE}")
     temporary = SMB_CONF_PATH.with_suffix(".tmp")
-    temporary.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    temporary.write_text("\n".join(desired) + "\n", encoding="utf-8")
     os.chmod(temporary, 0o644)
     temporary.replace(SMB_CONF_PATH)
 

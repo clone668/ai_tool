@@ -322,3 +322,61 @@ def test_managed_web_state_rejects_non_object_entries(tmp_path, monkeypatch) -> 
 
     with pytest.raises(ai_tool_ops.OpsFailure, match="state is invalid"):
         ai_tool_ops._load_web_state()
+
+
+def _patch_share_paths(tmp_path, monkeypatch, smb_conf: str):
+    from deploy import ai_tool_ops
+
+    conf = tmp_path / "smb.conf"
+    conf.write_text(smb_conf, encoding="utf-8")
+    managed = tmp_path / "ai-tool-shares.conf"
+    monkeypatch.setattr(ai_tool_ops, "SMB_CONF_PATH", conf)
+    monkeypatch.setattr(ai_tool_ops, "SHARE_MANAGED_PATH", managed)
+    monkeypatch.setattr(ai_tool_ops, "SHARE_BACKUP_DIR", tmp_path / "backups")
+    return ai_tool_ops, conf, managed
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="helper targets Linux")
+def test_share_include_appended_after_all_sections(tmp_path, monkeypatch) -> None:
+    ops, conf, managed = _patch_share_paths(
+        tmp_path,
+        monkeypatch,
+        "[global]\n\tinclude = registry\n\tserver string = Samba %v\n\n[data]\n\tpath = /data\n",
+    )
+
+    ops._ensure_share_layout()
+
+    lines = conf.read_text(encoding="utf-8").splitlines()
+    assert lines[-1] == ops.SHARE_INCLUDE_LINE
+    assert sum(1 for line in lines if line.strip().lower() == ops.SHARE_INCLUDE_LINE) == 1
+    assert managed.exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="helper targets Linux")
+def test_share_include_relocated_out_of_global_section(tmp_path, monkeypatch) -> None:
+    ops, conf, _managed = _patch_share_paths(
+        tmp_path,
+        monkeypatch,
+        "[global]\n    include = /etc/samba/ai-tool-shares.conf\n\tinclude = registry\n",
+    )
+
+    ops._ensure_share_layout()
+
+    lines = conf.read_text(encoding="utf-8").splitlines()
+    assert lines == ["[global]", "\tinclude = registry", ops.SHARE_INCLUDE_LINE]
+    backups = list((tmp_path / "backups").glob("smb.conf-*"))
+    assert len(backups) == 1
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="helper targets Linux")
+def test_share_include_layout_is_idempotent(tmp_path, monkeypatch) -> None:
+    ops, conf, _managed = _patch_share_paths(
+        tmp_path,
+        monkeypatch,
+        "[global]\n\tinclude = registry\n\n[data]\n\tpath = /data\n",
+    )
+
+    ops._ensure_share_layout()
+    first = conf.read_text(encoding="utf-8")
+    ops._ensure_share_layout()
+    assert conf.read_text(encoding="utf-8") == first
