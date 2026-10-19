@@ -38,6 +38,12 @@ def test_privileged_helper_exposes_only_structured_management_commands() -> None
 
     parser = build_parser()
     assert parser.parse_args(["system-details"]).command == "system-details"
+    assert parser.parse_args(["storage-details"]).command == "storage-details"
+    assert parser.parse_args(["storage-scan", "/data"]).path == "/data"
+    assert parser.parse_args(["share-inventory"]).command == "share-inventory"
+    share_args = parser.parse_args(["share-action", "media", "disable"])
+    assert share_args.share_id == "media"
+    assert share_args.action == "disable"
     assert parser.parse_args(["terminal-cleanup"]).command == "terminal-cleanup"
     with pytest.raises(SystemExit):
         parser.parse_args(["terminal-cleanup", "1000"])
@@ -46,6 +52,39 @@ def test_privileged_helper_exposes_only_structured_management_commands() -> None
     )
     assert args.scope == "docker"
     assert args.value == "unless-stopped"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="helper targets Linux")
+def test_storage_scan_rejects_paths_outside_allowed_roots() -> None:
+    from deploy.ai_tool_ops import OpsFailure, storage_scan
+
+    for path in ("/proc", "/var/lib/../../proc", "/dev", "/etc/../proc"):
+        with pytest.raises(OpsFailure):
+            storage_scan(path)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="helper targets Linux")
+def test_share_validation_rejects_unsafe_values() -> None:
+    from deploy.ai_tool_ops import OpsFailure, _validate_share
+
+    with pytest.raises(OpsFailure, match="share id"):
+        _validate_share({"id": "Bad Share", "comment": "x", "path": "/data/x"})
+    with pytest.raises(OpsFailure, match="share path"):
+        _validate_share({"id": "media", "comment": "x", "path": "/etc"})
+    with pytest.raises(OpsFailure, match="share user"):
+        _validate_share(
+            {"id": "media", "comment": "x", "path": "/data/x",
+             "valid_users": ["huxi; rm -rf /"]},
+            check_path=False,
+        )
+    share = _validate_share(
+        {"id": "media", "comment": "媒体库", "path": "/data/media",
+         "valid_users": ["huxi"], "guest_ok": True},
+        check_path=False,
+    )
+    assert share["read_only"] is False
+    assert share["browseable"] is True
+    assert share["valid_users"] == ["huxi"]
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="helper targets Linux")

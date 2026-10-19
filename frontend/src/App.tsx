@@ -10,7 +10,9 @@ import { MaintenanceView } from './components/MaintenanceView'
 import { Overview } from './components/Overview'
 import { Sidebar, type ViewName } from './components/Sidebar'
 import { SoftwareView } from './components/SoftwareView'
+import { SharesView } from './components/SharesView'
 import { StartupView } from './components/StartupView'
+import { StorageView } from './components/StorageView'
 import { SystemView } from './components/SystemView'
 import { WebServicesView } from './components/WebServicesView'
 
@@ -34,6 +36,8 @@ const viewTitles: Record<ViewName, { title: string; subtitle: string }> = {
   software: { title: '软件管理', subtitle: 'APT 与 Snap 软件包' },
   startup: { title: '开机启动', subtitle: 'systemd 与 Docker 重启策略' },
   system: { title: '系统监控', subtitle: '资源、磁盘、进程与网络' },
+  storage: { title: '存储管理', subtitle: '文件系统、磁盘健康与目录占用' },
+  shares: { title: '目录共享', subtitle: 'Samba 共享的创建与托管' },
   maintenance: { title: '系统维护', subtitle: '清理扫描与可回滚优化' },
   web: { title: 'Web 服务', subtitle: '自动发现、Nginx 入口与访问日志' },
   terminal: { title: '命令终端', subtitle: '隔离的低权限会话' },
@@ -227,6 +231,14 @@ export default function App() {
             />
           ) : activeView === 'system' ? (
             <SystemView onError={handleViewError} />
+          ) : activeView === 'storage' ? (
+            <StorageView onError={handleViewError} />
+          ) : activeView === 'shares' ? (
+            <SharesView
+              csrfToken={session.csrf_token}
+              onError={handleViewError}
+              onSuccess={(message) => showToast(message, 'success')}
+            />
           ) : activeView === 'maintenance' ? (
             <MaintenanceView
               csrfToken={session.csrf_token}

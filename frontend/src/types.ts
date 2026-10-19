@@ -234,6 +234,80 @@ export interface SystemDetails {
   history: MetricPoint[]
 }
 
+export interface SmartInfo {
+  available: boolean
+  passed: boolean | null
+  temperature_celsius: number | null
+  power_on_hours: number | null
+}
+
+export interface StorageDisk {
+  name: string
+  path: string
+  model: string | null
+  serial: string | null
+  size: number
+  rota: boolean | null
+  tran: string | null
+  smart: SmartInfo
+}
+
+export interface SwapDevice {
+  name: string
+  type: string
+  size: number
+  used: number
+  priority: number
+}
+
+export interface StorageDetails {
+  generated_at: string
+  filesystems: FilesystemState[]
+  disks: StorageDisk[]
+  swap: SwapDevice[]
+  smart_available: boolean
+}
+
+export interface StorageScanEntry {
+  path: string
+  name: string
+  size_bytes: number
+}
+
+export interface StorageScan {
+  path: string
+  total_bytes: number
+  entries: StorageScanEntry[]
+}
+
+export interface Share {
+  id: string
+  comment: string
+  path: string
+  read_only: boolean
+  browseable: boolean
+  guest_ok: boolean
+  valid_users: string[]
+  enabled: boolean
+}
+
+export interface DiscoveredShare {
+  name: string
+  path: string
+  comment: string | null
+  read_only: boolean | null
+  managed: boolean
+}
+
+export interface ShareInventory {
+  items: Share[]
+  discovered: DiscoveredShare[]
+  samba_available: boolean
+  smbd_active: boolean
+  share_roots: string[]
+  warnings: string[]
+}
+
 export type RiskLevel = 'safe' | 'medium' | 'high'
 
 export interface CleanupCandidate {

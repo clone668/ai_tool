@@ -1903,3 +1903,60 @@ pre:focus-visible {
   .terminal-state > span:last-child { display: none; }
   .terminal-surface { height: calc(100vh - 180px); min-height: 380px; padding: 8px 4px; }
 }
+
+/* 存储管理 */
+.scan-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 16px 0;
+}
+
+.chip-button {
+  min-height: 28px;
+  padding: 0 10px;
+  color: var(--subtle);
+  background: #fff;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  cursor: pointer;
+  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.chip-button:hover:not(:disabled) { color: var(--ink); border-color: var(--accent); }
+.chip-button.active { color: #fff; background: var(--accent); border-color: var(--accent); }
+.chip-button:disabled { cursor: wait; opacity: 0.6; }
+
+.scan-path-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.scan-current-path { color: var(--ink); font-size: 12px !important; }
+.scan-total { margin-left: auto; color: var(--subtle); font-size: 10px; }
+
+.scan-row { cursor: pointer; }
+.scan-row:hover td { background: #f4f7f6; }
+.scan-share-cell { width: 40%; }
+
+.scan-share {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+}
+
+.scan-share-bar {
+  height: 8px;
+  min-width: 1px;
+  max-width: 100%;
+  background: linear-gradient(90deg, var(--accent), #6ba88f);
+  border-radius: 4px;
+}
+
+.scan-share span { color: var(--subtle); font-size: 10px; white-space: nowrap; }

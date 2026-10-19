@@ -5,12 +5,16 @@ import type {
   MaintenanceDetails,
   PackageManager,
   SessionInfo,
+  Share,
+  ShareInventory,
   SoftwareAction,
   SoftwareInventory,
   SoftwarePlan,
   StartupAction,
   StartupInventory,
   StartupScope,
+  StorageDetails,
+  StorageScan,
   SystemDetails,
   WebInventory,
   WebService,
@@ -113,6 +117,10 @@ export const api = {
     body: JSON.stringify({ scope, name, action, value }),
   }),
   system: () => request<SystemDetails>('/api/system?history_limit=120'),
+  storage: () => request<StorageDetails>('/api/storage'),
+  storageScan: (path: string) => request<StorageScan>(
+    `/api/storage/scan?path=${encodeURIComponent(path)}`,
+  ),
   maintenance: () => request<MaintenanceDetails>('/api/maintenance'),
   maintenanceAction: (csrfToken: string, action: string, confirmationToken: string) =>
     request<{ ok: boolean; message: string }>('/api/maintenance/actions', {
@@ -127,6 +135,25 @@ export const api = {
       body: JSON.stringify({ action, confirmation_token: confirmationToken }),
     }),
   webServices: () => request<WebInventory>('/api/web-services'),
+  shares: () => request<ShareInventory>('/api/shares'),
+  saveShare: (csrfToken: string, share: Share) =>
+    request<{ ok: boolean; message: string }>(
+      `/api/shares/${encodeURIComponent(share.id)}`,
+      {
+        method: 'PUT',
+        headers: { 'X-CSRF-Token': csrfToken },
+        body: JSON.stringify(share),
+      },
+    ),
+  shareAction: (csrfToken: string, shareId: string, action: string) =>
+    request<{ ok: boolean; message: string }>(
+      `/api/shares/${encodeURIComponent(shareId)}/actions`,
+      {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': csrfToken },
+        body: JSON.stringify({ action }),
+      },
+    ),
   saveWebService: (csrfToken: string, service: WebService) =>
     request<{ ok: boolean; message: string }>(
       `/api/web-services/${encodeURIComponent(service.id)}`,

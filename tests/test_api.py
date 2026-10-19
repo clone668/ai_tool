@@ -103,6 +103,31 @@ def test_management_inventory_endpoints(demo_settings) -> None:
         assert system["filesystems"][1]["mountpoint"] == "/data"
         assert len(system["history"]) == 1
 
+        storage = client.get("/api/storage").json()
+        assert storage["disks"][0]["smart"]["passed"] is True
+        assert storage["filesystems"][1]["mountpoint"] == "/data"
+
+        scan = client.get("/api/storage/scan?path=/data").json()
+        assert scan["entries"]
+        assert client.get("/api/storage/scan?path=/data/../etc").status_code == 400
+
+        shares = client.get("/api/shares").json()
+        assert shares["items"][0]["id"] == "media"
+        assert shares["samba_available"] is True
+
+        saved = client.put(
+            "/api/shares/media",
+            json={"id": "media", "comment": "媒体库", "path": "/data/media",
+                  "valid_users": ["huxi"]},
+            headers={"X-CSRF-Token": session["csrf_token"]},
+        )
+        assert saved.status_code == 200
+        denied = client.put(
+            "/api/shares/media",
+            json={"id": "media", "comment": "媒体库", "path": "/data/media"},
+        )
+        assert denied.status_code == 403
+
         maintenance = client.get("/api/maintenance").json()
         assert any(
             item["id"] == "docker-volumes" and item["actionable"] is False

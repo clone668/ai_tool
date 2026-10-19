@@ -371,6 +371,130 @@ class OpsClient:
             }
         return self._json_command("system-details", timeout=80)
 
+    def storage_details(self) -> dict[str, Any]:
+        if self.settings.demo:
+            return {
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "filesystems": self.system_details()["filesystems"],
+                "disks": [
+                    {
+                        "name": "sda",
+                        "path": "/dev/sda",
+                        "model": "CT240BX500SSD1",
+                        "serial": "2415E8A0B1C2",
+                        "size": 240 * 1024**3,
+                        "rota": False,
+                        "tran": "sata",
+                        "smart": {
+                            "available": True,
+                            "passed": True,
+                            "temperature_celsius": 38,
+                            "power_on_hours": 21840,
+                        },
+                    },
+                    {
+                        "name": "sdb",
+                        "path": "/dev/sdb",
+                        "model": "ST2000DM008-2FR102",
+                        "serial": "ZFL3H2KA",
+                        "size": 2 * 1024**4,
+                        "rota": True,
+                        "tran": "sata",
+                        "smart": {
+                            "available": True,
+                            "passed": True,
+                            "temperature_celsius": 34,
+                            "power_on_hours": 30210,
+                        },
+                    },
+                ],
+                "swap": [
+                    {
+                        "name": "/swapfile",
+                        "type": "file",
+                        "size": 2 * 1024**3,
+                        "used": 80 * 1024**2,
+                        "priority": -2,
+                    }
+                ],
+                "smart_available": True,
+            }
+        return self._json_command("storage-details", timeout=90)
+
+    def storage_scan(self, path: str) -> dict[str, Any]:
+        if self.settings.demo:
+            entries = [
+                ("backups", 386 * 1024**3),
+                ("docker", 18 * 1024**3),
+                ("media", 6.2 * 1024**3),
+                ("projects", 1.8 * 1024**3),
+                ("logs", 460 * 1024**2),
+            ]
+            base = path.rstrip("/") or "/data"
+            return {
+                "path": path,
+                "total_bytes": sum(size for _, size in entries),
+                "entries": [
+                    {"path": f"{base}/{name}", "name": name, "size_bytes": int(size)}
+                    for name, size in entries
+                ],
+            }
+        return self._json_command("storage-scan", path, timeout=200)
+
+    def share_inventory(self) -> dict[str, Any]:
+        if self.settings.demo:
+            return {
+                "items": [
+                    {
+                        "id": "media",
+                        "comment": "媒体库",
+                        "path": "/data/media",
+                        "read_only": False,
+                        "browseable": True,
+                        "guest_ok": False,
+                        "valid_users": ["huxi"],
+                        "enabled": True,
+                    },
+                    {
+                        "id": "backup-drop",
+                        "comment": "备份投递",
+                        "path": "/data/backups/drop",
+                        "read_only": True,
+                        "browseable": True,
+                        "guest_ok": False,
+                        "valid_users": [],
+                        "enabled": False,
+                    },
+                ],
+                "discovered": [
+                    {
+                        "name": "oldshare",
+                        "path": "/srv/oldshare",
+                        "comment": "手动配置的共享",
+                        "read_only": True,
+                        "managed": False,
+                    }
+                ],
+                "samba_available": True,
+                "smbd_active": True,
+                "share_roots": ["/data", "/srv", "/home"],
+                "warnings": [],
+            }
+        return self._json_command("share-inventory", timeout=60)
+
+    def share_upsert(self, share: dict[str, Any]) -> dict[str, Any]:
+        if self.settings.demo:
+            return {"ok": True, "message": f"演示模式：共享 {share['id']} 已保存"}
+        payload = base64.urlsafe_b64encode(
+            json.dumps(share, ensure_ascii=False).encode("utf-8")
+        ).decode("ascii").rstrip("=")
+        return self._json_command("share-upsert", payload, timeout=100)
+
+    def share_action(self, share_id: str, action: str) -> dict[str, Any]:
+        if self.settings.demo:
+            return {"ok": True, "message": f"演示模式：共享 {share_id} {action} 已完成"}
+        return self._json_command("share-action", share_id, action, timeout=100)
+
     def maintenance_scan(self) -> dict[str, Any]:
         if self.settings.demo:
             return {

@@ -91,6 +91,23 @@ class WebActionRequest(BaseModel):
     action: Literal["enable", "disable", "delete", "reload"]
 
 
+class ShareRequest(BaseModel):
+    id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,31}$")
+    comment: str = Field(min_length=1, max_length=100)
+    path: str = Field(min_length=1, max_length=200, pattern=r"^/[A-Za-z0-9._+/@:-]*$")
+    read_only: bool = False
+    browseable: bool = True
+    guest_ok: bool = False
+    valid_users: list[
+        Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")]
+    ] = Field(default_factory=list, max_length=16)
+    enabled: bool = True
+
+
+class ShareActionRequest(BaseModel):
+    action: Literal["enable", "disable", "delete", "reload"]
+
+
 def _client_ip(request: Request | WebSocket) -> str:
     return request.client.host if request.client else "unknown"
 
@@ -453,6 +470,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         details["history"] = database.list_system_metrics(history_limit)
         return details
 
+    @app.get("/api/storage")
+    def storage_information(
+        _: Annotated[dict[str, Any], Depends(require_session)],
+    ) -> dict[str, Any]:
+        try:
+            return ops.storage_details()
+        except OpsError as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+    @app.get("/api/storage/scan")
+    def storage_scan(
+        _: Annotated[dict[str, Any], Depends(require_session)],
+        path: str = Query(
+            default="/data", max_length=200, pattern=r"^/[A-Za-z0-9._+/@:-]*$"
+        ),
+    ) -> dict[str, Any]:
+        if ".." in path:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "扫描路径无效")
+        try:
+            return ops.storage_scan(path)
+        except OpsError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
     @app.get("/api/maintenance")
     def maintenance_information(
         _: Annotated[dict[str, Any], Depends(require_session)],
@@ -583,6 +623,51 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except OpsError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
         return {"content": content, "stream": stream, "lines": lines}
+
+    @app.get("/api/shares")
+    def share_inventory(
+        _: Annotated[dict[str, Any], Depends(require_session)],
+    ) -> dict[str, Any]:
+        try:
+            return ops.share_inventory()
+        except OpsError as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+    @app.put("/api/shares/{share_id}")
+    def save_share(
+        share_id: str,
+        payload: ShareRequest,
+        request: Request,
+        session: Annotated[dict[str, Any], Depends(require_csrf)],
+    ) -> dict[str, Any]:
+        if share_id != payload.id:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "共享 ID 不一致")
+        if ".." in payload.path:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "共享路径无效")
+        return audited_operation(
+            request=request,
+            session=session,
+            action="share.save",
+            detail=f"目录共享 {share_id}",
+            component_id=share_id,
+            operation=lambda: ops.share_upsert(payload.model_dump()),
+        )
+
+    @app.post("/api/shares/{share_id}/actions")
+    def share_action(
+        share_id: str,
+        payload: ShareActionRequest,
+        request: Request,
+        session: Annotated[dict[str, Any], Depends(require_csrf)],
+    ) -> dict[str, Any]:
+        return audited_operation(
+            request=request,
+            session=session,
+            action=f"share.{payload.action}",
+            detail=f"目录共享 {share_id}",
+            component_id=share_id,
+            operation=lambda: ops.share_action(share_id, payload.action),
+        )
 
     @app.get("/api/audit")
     def audit_log(

@@ -2,12 +2,14 @@ import {
   AppWindow,
   Boxes,
   Gauge,
+  HardDrive,
   History,
   LayoutDashboard,
   LogOut,
   PackageSearch,
   ScrollText,
   ServerCog,
+  Share2,
   Sparkles,
   TerminalSquare,
   UserRound,
@@ -18,6 +20,8 @@ export type ViewName =
   | 'software'
   | 'startup'
   | 'system'
+  | 'storage'
+  | 'shares'
   | 'maintenance'
   | 'web'
   | 'terminal'
@@ -36,6 +40,8 @@ const navigation = [
   { id: 'software' as const, label: '软件', icon: PackageSearch },
   { id: 'startup' as const, label: '自启动', icon: Boxes },
   { id: 'system' as const, label: '系统', icon: Gauge },
+  { id: 'storage' as const, label: '存储', icon: HardDrive },
+  { id: 'shares' as const, label: '共享', icon: Share2 },
   { id: 'maintenance' as const, label: '维护', icon: Sparkles },
   { id: 'web' as const, label: 'Web 服务', icon: AppWindow },
   { id: 'terminal' as const, label: '终端', icon: TerminalSquare },

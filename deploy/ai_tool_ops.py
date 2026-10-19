@@ -47,6 +47,29 @@ PS = "/usr/bin/ps"
 LSBLK = "/usr/bin/lsblk"
 DF = "/usr/bin/df"
 SS = "/usr/bin/ss"
+DU = "/usr/bin/du"
+STORAGE_SCAN_ROOTS = (
+    "/data",
+    "/etc",
+    "/home",
+    "/opt",
+    "/root",
+    "/srv",
+    "/tmp",
+    "/usr",
+    "/var",
+)
+STORAGE_SCAN_MAX_ENTRIES = 200
+STORAGE_PATH_PATTERN = re.compile(r"^/[A-Za-z0-9._+/@:-]{0,199}$")
+SMB_CONF_PATH = Path("/etc/samba/smb.conf")
+SHARE_STATE_PATH = Path("/etc/ai-tool/shares.json")
+SHARE_MANAGED_PATH = Path("/etc/samba/ai-tool-shares.conf")
+SHARE_BACKUP_DIR = Path("/etc/ai-tool/backups/shares")
+SHARE_INCLUDE_LINE = "include = /etc/samba/ai-tool-shares.conf"
+SHARE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+SHARE_USER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
+SHARE_PATH_ROOTS = ("/data", "/srv", "/home")
+SHARE_SPECIAL_SECTIONS = {"global", "homes", "printers", "print$"}
 WEB_STATE_PATH = Path("/etc/ai-tool/web-services.json")
 WEB_BACKUP_DIR = Path("/etc/ai-tool/backups/web")
 WEB_AVAILABLE_DIR = Path("/etc/nginx/ai-tool-sites-available")
@@ -1077,6 +1100,383 @@ def system_details() -> dict[str, Any]:
     }
 
 
+def _smart_report(device_path: str) -> dict[str, Any]:
+    smartctl = shutil.which("smartctl")
+    if not smartctl:
+        return {"available": False, "passed": None, "temperature_celsius": None, "power_on_hours": None}
+    result = run(
+        [smartctl, "-j", "-H", "-A", "-i", "--nocheck=standby", device_path], timeout=15
+    )
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return {"available": False, "passed": None, "temperature_celsius": None, "power_on_hours": None}
+    if not isinstance(data, dict) or "device" not in data:
+        return {"available": False, "passed": None, "temperature_celsius": None, "power_on_hours": None}
+    passed = data.get("smart_status", {}).get("passed")
+    temperature = data.get("temperature", {}).get("current")
+    hours = data.get("power_on_time", {}).get("hours")
+    return {
+        "available": True,
+        "passed": bool(passed) if isinstance(passed, bool) else None,
+        "temperature_celsius": temperature if isinstance(temperature, (int, float)) else None,
+        "power_on_hours": hours if isinstance(hours, int) else None,
+    }
+
+
+def _swap_details() -> list[dict[str, Any]]:
+    output = []
+    swaps = Path("/proc/swaps")
+    if not swaps.exists():
+        return output
+    for line in swaps.read_text(encoding="ascii").splitlines()[1:]:
+        fields = line.split()
+        if len(fields) < 5:
+            continue
+        try:
+            output.append(
+                {
+                    "name": fields[0],
+                    "type": fields[1],
+                    "size": int(fields[2]) * 1024,
+                    "used": int(fields[3]) * 1024,
+                    "priority": int(fields[4]),
+                }
+            )
+        except ValueError:
+            continue
+    return output
+
+
+def storage_details() -> dict[str, Any]:
+    lsblk = run(
+        [LSBLK, "-J", "-b", "-d", "-o", "NAME,PATH,TYPE,SIZE,MODEL,SERIAL,ROTA,TRAN"],
+        timeout=20,
+    )
+    try:
+        devices = json.loads(lsblk.stdout).get("blockdevices", [])
+    except json.JSONDecodeError:
+        devices = []
+    disks = []
+    for device in devices:
+        if not isinstance(device, dict) or device.get("type") != "disk":
+            continue
+        path = str(device.get("path") or f"/dev/{device.get('name', '')}")
+        disks.append(
+            {
+                "name": str(device.get("name") or path),
+                "path": path,
+                "model": device.get("model") or None,
+                "serial": device.get("serial") or None,
+                "size": int(device.get("size") or 0),
+                "rota": device.get("rota"),
+                "tran": device.get("tran") or None,
+                "smart": _smart_report(path),
+            }
+        )
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "filesystems": _filesystem_details(),
+        "disks": disks,
+        "swap": _swap_details(),
+        "smart_available": bool(shutil.which("smartctl")),
+    }
+
+
+def _validate_scan_path(raw_path: str) -> str:
+    _require_pattern(raw_path, STORAGE_PATH_PATTERN, "scan path")
+    resolved = Path(raw_path).resolve(strict=False)
+    resolved_text = str(resolved)
+    allowed = any(
+        resolved_text == root or resolved_text.startswith(f"{root}/")
+        for root in STORAGE_SCAN_ROOTS
+    )
+    if not allowed:
+        raise OpsFailure("scan path is not in the allowed storage roots")
+    if not resolved.is_dir() or resolved.is_symlink():
+        raise OpsFailure("scan path is not a real directory")
+    return resolved_text
+
+
+def storage_scan(raw_path: str) -> dict[str, Any]:
+    path = _validate_scan_path(raw_path)
+    result = run([DU, "-x", "-b", "--max-depth=1", "--", path], timeout=180)
+    if result.returncode != 0:
+        raise OpsFailure((result.stderr or "directory scan failed").strip()[-1000:])
+    entries = []
+    total = 0
+    for line in result.stdout.splitlines():
+        size_text, separator, entry_path = line.partition("\t")
+        if not separator:
+            continue
+        try:
+            size = int(size_text)
+        except ValueError:
+            continue
+        if entry_path == path:
+            total = size
+            continue
+        entries.append(
+            {
+                "path": entry_path,
+                "name": entry_path.rsplit("/", 1)[-1] or entry_path,
+                "size_bytes": size,
+            }
+        )
+    entries.sort(key=lambda item: item["size_bytes"], reverse=True)
+    return {
+        "path": path,
+        "total_bytes": total,
+        "entries": entries[:STORAGE_SCAN_MAX_ENTRIES],
+    }
+
+
+def _load_share_state() -> list[dict[str, Any]]:
+    if not SHARE_STATE_PATH.exists():
+        return []
+    try:
+        value = json.loads(SHARE_STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise OpsFailure("managed share state is invalid") from exc
+    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+        raise OpsFailure("managed share state is invalid")
+    return [_validate_share(item, check_path=False) for item in value]
+
+
+def _save_share_state(items: list[dict[str, Any]]) -> None:
+    SHARE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary = SHARE_STATE_PATH.with_suffix(".tmp")
+    temporary.write_text(json.dumps(items, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.chmod(temporary, 0o644)
+    temporary.replace(SHARE_STATE_PATH)
+
+
+def _validate_share_path(raw_path: str) -> str:
+    _require_pattern(raw_path, STORAGE_PATH_PATTERN, "share path")
+    resolved = Path(raw_path).resolve(strict=False)
+    resolved_text = str(resolved)
+    if not any(
+        resolved_text == root or resolved_text.startswith(f"{root}/")
+        for root in SHARE_PATH_ROOTS
+    ):
+        raise OpsFailure("share path is not in the allowed share roots")
+    if not resolved.is_dir() or resolved.is_symlink():
+        raise OpsFailure("share path is not a real directory")
+    return resolved_text
+
+
+def _validate_share(value: dict[str, Any], *, check_path: bool = True) -> dict[str, Any]:
+    share_id = _require_pattern(str(value.get("id", "")), SHARE_ID_PATTERN, "share id")
+    comment = str(value.get("comment", "")).strip()
+    if not comment or len(comment) > 100:
+        raise OpsFailure("invalid share comment")
+    raw_path = str(value.get("path", ""))
+    path = _validate_share_path(raw_path) if check_path else raw_path
+    valid_users_raw = value.get("valid_users", [])
+    if not isinstance(valid_users_raw, list) or len(valid_users_raw) > 16:
+        raise OpsFailure("invalid share user list")
+    valid_users = [
+        _require_pattern(str(user), SHARE_USER_PATTERN, "share user") for user in valid_users_raw
+    ]
+    return {
+        "id": share_id,
+        "comment": comment,
+        "path": path,
+        "read_only": bool(value.get("read_only", False)),
+        "browseable": bool(value.get("browseable", True)),
+        "guest_ok": bool(value.get("guest_ok", False)),
+        "valid_users": valid_users,
+        "enabled": bool(value.get("enabled", True)),
+    }
+
+
+def _render_shares(items: list[dict[str, Any]]) -> str:
+    lines = ["# Managed by AI Tool. Manual changes will be replaced."]
+    for share in items:
+        if not share["enabled"]:
+            continue
+        lines.append(f"[{share['id']}]")
+        lines.append(f"    comment = {share['comment']}")
+        lines.append(f"    path = {share['path']}")
+        lines.append(f"    read only = {'yes' if share['read_only'] else 'no'}")
+        lines.append(f"    browseable = {'yes' if share['browseable'] else 'no'}")
+        lines.append(f"    guest ok = {'yes' if share['guest_ok'] else 'no'}")
+        if share["valid_users"]:
+            lines.append(f"    valid users = {' '.join(share['valid_users'])}")
+        lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def _ensure_share_layout() -> None:
+    if not SMB_CONF_PATH.exists():
+        raise OpsFailure("Samba 未安装，找不到 /etc/samba/smb.conf")
+    SHARE_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    if not SHARE_MANAGED_PATH.exists():
+        SHARE_MANAGED_PATH.write_text(_render_shares([]), encoding="utf-8")
+        os.chmod(SHARE_MANAGED_PATH, 0o644)
+    content = SMB_CONF_PATH.read_text(encoding="utf-8", errors="replace")
+    if SHARE_INCLUDE_LINE in content:
+        return
+    lines = content.splitlines()
+    insert_at = next(
+        (index + 1 for index, line in enumerate(lines) if line.strip().lower() == "[global]"),
+        None,
+    )
+    if insert_at is None:
+        raise OpsFailure("smb.conf 缺少 [global] 段，无法接入托管配置")
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    shutil.copy2(SMB_CONF_PATH, SHARE_BACKUP_DIR / f"smb.conf-{timestamp}")
+    lines.insert(insert_at, f"    {SHARE_INCLUDE_LINE}")
+    temporary = SMB_CONF_PATH.with_suffix(".tmp")
+    temporary.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.chmod(temporary, 0o644)
+    temporary.replace(SMB_CONF_PATH)
+
+
+def _samba_apply() -> None:
+    testparm = shutil.which("testparm")
+    if not testparm:
+        raise OpsFailure("testparm 不可用，无法校验 Samba 配置")
+    test = run([testparm, "-s", "--suppress-prompt", str(SMB_CONF_PATH)], timeout=30)
+    if test.returncode != 0:
+        raise OpsFailure((test.stderr or test.stdout).strip()[-2000:] or "Samba 配置校验失败")
+    active = run([SYSTEMCTL, "is-active", "smbd.service"], timeout=10)
+    if active.returncode == 0:
+        reload_result = run([SYSTEMCTL, "reload", "smbd.service"], timeout=30)
+        if reload_result.returncode != 0:
+            message = (reload_result.stderr or reload_result.stdout).strip()[-2000:]
+            raise OpsFailure(message or "smbd reload failed")
+
+
+def _smb_conf_shares() -> list[dict[str, Any]]:
+    try:
+        content = SMB_CONF_PATH.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    shares: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        section = re.fullmatch(r"\[([^\]]+)\]", line)
+        if section:
+            name = section.group(1).strip()
+            current = (
+                {"name": name, "path": None, "comment": None, "read_only": None}
+                if name.lower() not in SHARE_SPECIAL_SECTIONS
+                else None
+            )
+            if current is not None:
+                shares.append(current)
+            continue
+        if current is None or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip().lower()
+        value = value.strip()
+        if key == "path":
+            current["path"] = value
+        elif key == "comment":
+            current["comment"] = value
+        elif key == "read only":
+            current["read_only"] = value.lower() in {"yes", "true", "1"}
+    return [share for share in shares if share["path"]]
+
+
+def share_inventory() -> dict[str, Any]:
+    warnings = []
+    samba_available = SMB_CONF_PATH.exists() and bool(shutil.which("testparm"))
+    items: list[dict[str, Any]] = []
+    if samba_available:
+        try:
+            items = _load_share_state()
+        except OpsFailure as exc:
+            warnings.append(str(exc))
+            items = []
+    else:
+        warnings.append("未安装 Samba，共享管理不可用")
+    managed_ids = {item["id"] for item in items}
+    discovered = [
+        {**share, "managed": False}
+        for share in _smb_conf_shares()
+        if share["name"] not in managed_ids
+    ]
+    smbd_active = run([SYSTEMCTL, "is-active", "smbd.service"], timeout=10).returncode == 0
+    return {
+        "items": items,
+        "discovered": discovered,
+        "samba_available": samba_available,
+        "smbd_active": smbd_active,
+        "share_roots": list(SHARE_PATH_ROOTS),
+        "warnings": warnings,
+    }
+
+
+def upsert_share(encoded: str) -> dict[str, Any]:
+    share = _validate_share(_decode_payload(encoded))
+    if not SMB_CONF_PATH.exists() or not shutil.which("testparm"):
+        raise OpsFailure("Samba 未安装，无法创建共享")
+    _ensure_share_layout()
+    old_content = (
+        SHARE_MANAGED_PATH.read_text(encoding="utf-8")
+        if SHARE_MANAGED_PATH.exists()
+        else None
+    )
+    items = [item for item in _load_share_state() if item.get("id") != share["id"]]
+    items.append(share)
+    items.sort(key=lambda item: item["id"])
+    temporary = SHARE_MANAGED_PATH.with_suffix(".tmp")
+    temporary.write_text(_render_shares(items), encoding="utf-8")
+    os.chmod(temporary, 0o644)
+    temporary.replace(SHARE_MANAGED_PATH)
+    try:
+        _samba_apply()
+    except OpsFailure:
+        if old_content is None:
+            SHARE_MANAGED_PATH.unlink(missing_ok=True)
+        else:
+            SHARE_MANAGED_PATH.write_text(old_content, encoding="utf-8")
+        raise
+    _save_share_state(items)
+    return {"ok": True, "message": f"共享 {share['id']} 已保存并生效"}
+
+
+def perform_share_action(share_id: str, action: str) -> dict[str, Any]:
+    _require_pattern(share_id, SHARE_ID_PATTERN, "share id")
+    if action not in {"enable", "disable", "delete", "reload"}:
+        raise OpsFailure("share action is not allowed")
+    if action == "reload":
+        _samba_apply()
+        return {"ok": True, "message": "Samba 配置已重新校验并加载"}
+    items = _load_share_state()
+    share = next((item for item in items if item.get("id") == share_id), None)
+    if not share:
+        raise OpsFailure("managed share does not exist")
+    old_content = SHARE_MANAGED_PATH.read_text(encoding="utf-8") if SHARE_MANAGED_PATH.exists() else None
+    if action in {"enable", "disable"}:
+        share["enabled"] = action == "enable"
+        remaining = items
+    else:
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        SHARE_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        (SHARE_BACKUP_DIR / f"{share_id}-{timestamp}.json").write_text(
+            json.dumps(share, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        remaining = [item for item in items if item.get("id") != share_id]
+    SHARE_MANAGED_PATH.write_text(_render_shares(remaining), encoding="utf-8")
+    try:
+        _samba_apply()
+    except OpsFailure:
+        if old_content is None:
+            SHARE_MANAGED_PATH.unlink(missing_ok=True)
+        else:
+            SHARE_MANAGED_PATH.write_text(old_content, encoding="utf-8")
+        raise
+    _save_share_state(remaining)
+    return {"ok": True, "message": f"共享 {share_id}: {action} 已完成"}
+
+
 def _directory_size(path: Path) -> int:
     total = 0
     try:
@@ -1958,6 +2358,11 @@ def build_parser() -> argparse.ArgumentParser:
     startup_action_parser.add_argument("value", nargs="?", default="_")
 
     subparsers.add_parser("system-details")
+    subparsers.add_parser("storage-details")
+
+    storage_scan_parser = subparsers.add_parser("storage-scan")
+    storage_scan_parser.add_argument("path")
+
     subparsers.add_parser("maintenance-scan")
 
     maintenance_action_parser = subparsers.add_parser("maintenance-action")
@@ -1981,6 +2386,17 @@ def build_parser() -> argparse.ArgumentParser:
     web_logs_parser.add_argument("service_id")
     web_logs_parser.add_argument("stream", choices=["access", "error"])
     web_logs_parser.add_argument("lines", type=int)
+
+    subparsers.add_parser("share-inventory")
+
+    share_upsert_parser = subparsers.add_parser("share-upsert")
+    share_upsert_parser.add_argument("payload")
+
+    share_action_parser = subparsers.add_parser("share-action")
+    share_action_parser.add_argument("share_id")
+    share_action_parser.add_argument(
+        "action", choices=["enable", "disable", "delete", "reload"]
+    )
     return parser
 
 
@@ -2018,6 +2434,10 @@ def main() -> int:
             )
         elif args.command == "system-details":
             print(_json_output(system_details()))
+        elif args.command == "storage-details":
+            print(_json_output(storage_details()))
+        elif args.command == "storage-scan":
+            print(_json_output(storage_scan(args.path)))
         elif args.command == "maintenance-scan":
             print(_json_output(maintenance_scan()))
         elif args.command == "maintenance-action":
@@ -2034,6 +2454,12 @@ def main() -> int:
             print(_json_output(perform_web_action(args.service_id, args.action)))
         elif args.command == "web-logs":
             sys.stdout.write(read_web_logs(args.service_id, args.stream, args.lines))
+        elif args.command == "share-inventory":
+            print(_json_output(share_inventory()))
+        elif args.command == "share-upsert":
+            print(_json_output(upsert_share(args.payload)))
+        elif args.command == "share-action":
+            print(_json_output(perform_share_action(args.share_id, args.action)))
         return 0
     except OpsFailure as exc:
         print(str(exc), file=sys.stderr)
