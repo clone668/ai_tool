@@ -459,10 +459,14 @@ class OpsClient:
             }
         return self._json_command("storage-scan", path, timeout=200)
 
-    def storage_mount(self, device: str, mount_point: str) -> dict[str, Any]:
+    def storage_mount(
+        self, device: str, mount_point: str, persist: bool
+    ) -> dict[str, Any]:
         if self.settings.demo:
-            return {"ok": True, "message": f"演示模式：{device} 已挂载到 {mount_point}"}
-        return self._json_command("storage-mount", device, mount_point, timeout=90)
+            suffix = "，并写入 fstab" if persist else ""
+            return {"ok": True, "message": f"演示模式：{device} 已挂载到 {mount_point}{suffix}"}
+        extra = ["--persist"] if persist else []
+        return self._json_command("storage-mount", device, mount_point, *extra, timeout=90)
 
     def storage_umount(self, mount_point: str) -> dict[str, Any]:
         if self.settings.demo:

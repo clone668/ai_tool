@@ -48,12 +48,14 @@ export function StorageView({ csrfToken, onError, onSuccess }: StorageViewProps)
   const [scanning, setScanning] = useState(false)
   const [pending, setPending] = useState<MountPending | null>(null)
   const [mountPointInput, setMountPointInput] = useState('')
+  const [mountPersist, setMountPersist] = useState(true)
   const [formatFs, setFormatFs] = useState<'ext4' | 'xfs'>('ext4')
   const [formatLabel, setFormatLabel] = useState('')
   const [mountBusy, setMountBusy] = useState(false)
 
   const openMountDialog = (partition: StoragePartition) => {
     setMountPointInput(`/mnt/${partition.name}`)
+    setMountPersist(true)
     setPending({ kind: 'mount', partition })
   }
 
@@ -97,7 +99,7 @@ export function StorageView({ csrfToken, onError, onSuccess }: StorageViewProps)
     setMountBusy(true)
     try {
       const result = pending.kind === 'mount'
-        ? await api.storageMount(csrfToken, pending.partition.path, mountPointInput.trim())
+        ? await api.storageMount(csrfToken, pending.partition.path, mountPointInput.trim(), mountPersist)
         : pending.kind === 'umount'
           ? await api.storageUmount(csrfToken, pending.mountPoint)
           : await api.storageFormat(csrfToken, pending.partition.path, formatFs, formatLabel.trim())
@@ -112,7 +114,7 @@ export function StorageView({ csrfToken, onError, onSuccess }: StorageViewProps)
     } finally {
       setMountBusy(false)
     }
-  }, [pending, csrfToken, mountPointInput, formatFs, formatLabel, onSuccess, onError, loadStorage])
+  }, [pending, csrfToken, mountPointInput, mountPersist, formatFs, formatLabel, onSuccess, onError, loadStorage])
 
   useEffect(() => {
     void loadStorage()
@@ -268,7 +270,7 @@ export function StorageView({ csrfToken, onError, onSuccess }: StorageViewProps)
         <OperationDialog
           title="确认挂载分区"
           target={pending.partition.path}
-          description="挂载不会写入 fstab，重启后如需自动挂载请另行配置。"
+          description="勾选自动挂载后会写入 fstab，重启后自动挂载；卸载时面板会一并移除该记录。"
           confirmLabel="挂载"
           busy={mountBusy}
           onClose={() => setPending(null)}
@@ -282,6 +284,14 @@ export function StorageView({ csrfToken, onError, onSuccess }: StorageViewProps)
               pattern="/(mnt|media)/[A-Za-z0-9._-]{1,64}"
               required
             />
+          </label>
+          <label className="persist-field">
+            <input
+              type="checkbox"
+              checked={mountPersist}
+              onChange={(event) => setMountPersist(event.target.checked)}
+            />
+            <span>开机自动挂载（写入 fstab，UUID 定位）</span>
           </label>
         </OperationDialog>
       )}

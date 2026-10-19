@@ -121,11 +121,11 @@ export const api = {
   storageScan: (path: string) => request<StorageScan>(
     `/api/storage/scan?path=${encodeURIComponent(path)}`,
   ),
-  storageMount: (csrfToken: string, device: string, mountPoint: string) =>
+  storageMount: (csrfToken: string, device: string, mountPoint: string, persist: boolean) =>
     request<{ ok: boolean; message: string }>('/api/storage/mount', {
       method: 'POST',
       headers: { 'X-CSRF-Token': csrfToken },
-      body: JSON.stringify({ device, mount_point: mountPoint }),
+      body: JSON.stringify({ device, mount_point: mountPoint, persist }),
     }),
   storageUmount: (csrfToken: string, mountPoint: string) =>
     request<{ ok: boolean; message: string }>('/api/storage/umount', {

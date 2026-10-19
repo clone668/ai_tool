@@ -1985,6 +1985,19 @@ pre:focus-visible {
 
 .partition-actions { display: inline-flex; gap: 6px; }
 
+.persist-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  color: var(--subtle);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.persist-field input { accent-color: var(--accent); width: 14px; height: 14px; }
+
 .format-fields { display: flex; gap: 12px; flex-wrap: wrap; width: 100%; }
 
 .format-fields .mount-point-field { flex: 1 1 180px; }

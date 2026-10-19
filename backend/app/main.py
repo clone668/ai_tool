@@ -111,6 +111,7 @@ class ShareActionRequest(BaseModel):
 class StorageMountRequest(BaseModel):
     device: str = Field(pattern=r"^/dev/[A-Za-z0-9._/-]{1,63}$")
     mount_point: str = Field(pattern=r"^/(mnt|media)/[A-Za-z0-9._-]{1,64}$")
+    persist: bool = False
 
 
 class StorageUmountRequest(BaseModel):
@@ -520,7 +521,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             action="storage.mount",
             detail=f"挂载 {payload.device} 到 {payload.mount_point}",
             component_id=payload.device,
-            operation=lambda: ops.storage_mount(payload.device, payload.mount_point),
+            operation=lambda: ops.storage_mount(
+                payload.device, payload.mount_point, payload.persist
+            ),
         )
 
     @app.post("/api/storage/umount")

@@ -1238,7 +1238,62 @@ def _find_partition(device: str) -> dict[str, Any]:
     raise OpsFailure("设备不存在或不是可挂载的分区")
 
 
-def mount_device(device: str, mount_point: str) -> dict[str, Any]:
+FSTAB_PATH = Path("/etc/fstab")
+FSTAB_MARK = "# ai-tool"
+
+
+def _fstab_lines() -> list[str]:
+    try:
+        return FSTAB_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+
+
+def _fstab_add(uuid: str, mount_point: str, fstype: str) -> None:
+    lines = _fstab_lines()
+    for line in lines:
+        fields = line.split()
+        if len(fields) >= 2 and fields[1] == mount_point and not line.strip().startswith("#"):
+            raise OpsFailure(f"fstab 中已存在 {mount_point} 的挂载记录，请先人工处理")
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    backup_dir = Path("/etc/ai-tool/backups")
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(FSTAB_PATH, backup_dir / f"fstab-{timestamp}")
+    lines.append(f"UUID={uuid} {mount_point} {fstype} defaults,nofail 0 2 {FSTAB_MARK}")
+    temporary = FSTAB_PATH.with_suffix(".tmp")
+    temporary.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.chmod(temporary, 0o644)
+    temporary.replace(FSTAB_PATH)
+
+
+def _fstab_remove(mount_point: str) -> bool:
+    lines = _fstab_lines()
+    kept = []
+    removed = False
+    for line in lines:
+        fields = line.split()
+        if (
+            FSTAB_MARK in line
+            and len(fields) >= 2
+            and fields[1] == mount_point
+        ):
+            removed = True
+            continue
+        kept.append(line)
+    if not removed:
+        return False
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    backup_dir = Path("/etc/ai-tool/backups")
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(FSTAB_PATH, backup_dir / f"fstab-{timestamp}")
+    temporary = FSTAB_PATH.with_suffix(".tmp")
+    temporary.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    os.chmod(temporary, 0o644)
+    temporary.replace(FSTAB_PATH)
+    return True
+
+
+def mount_device(device: str, mount_point: str, persist: bool) -> dict[str, Any]:
     _require_pattern(device, MOUNT_DEVICE_PATTERN, "mount device")
     _require_pattern(mount_point, MOUNT_POINT_PATTERN, "mount point")
     partition = _find_partition(device)
@@ -1250,10 +1305,20 @@ def mount_device(device: str, mount_point: str) -> dict[str, Any]:
     if target.exists() and any(target.iterdir()):
         raise OpsFailure("挂载点目录非空，拒绝覆盖挂载")
     target.mkdir(parents=True, exist_ok=True)
+    if persist:
+        uuid = run([LSBLK, "-n", "-o", "UUID", device], timeout=15).stdout.strip()
+        if not uuid:
+            raise OpsFailure("无法读取分区 UUID，不能写入 fstab")
+        _fstab_add(uuid, mount_point, partition["fstype"])
     result = run([MOUNT, "--source", device, "--target", mount_point], timeout=60)
     if result.returncode != 0:
+        if persist:
+            _fstab_remove(mount_point)
         raise OpsFailure((result.stderr or result.stdout).strip()[-1000:] or "挂载失败")
-    return {"ok": True, "message": f"{device} 已挂载到 {mount_point}"}
+    message = f"{device} 已挂载到 {mount_point}"
+    if persist:
+        message += "，并写入 fstab 开机自动挂载"
+    return {"ok": True, "message": message}
 
 
 def umount_device(mount_point: str) -> dict[str, Any]:
@@ -1267,7 +1332,10 @@ def umount_device(mount_point: str) -> dict[str, Any]:
     result = run([UMOUNT, mount_point], timeout=60)
     if result.returncode != 0:
         raise OpsFailure((result.stderr or result.stdout).strip()[-1000:] or "卸载失败")
-    return {"ok": True, "message": f"{source} 已从 {mount_point} 卸载"}
+    message = f"{source} 已从 {mount_point} 卸载"
+    if _fstab_remove(mount_point):
+        message += "，fstab 自动挂载记录已移除"
+    return {"ok": True, "message": message}
 
 
 def _lsblk_tree() -> list[dict[str, Any]]:
@@ -2533,6 +2601,7 @@ def build_parser() -> argparse.ArgumentParser:
     storage_mount_parser = subparsers.add_parser("storage-mount")
     storage_mount_parser.add_argument("device")
     storage_mount_parser.add_argument("mount_point")
+    storage_mount_parser.add_argument("--persist", action="store_true")
 
     storage_umount_parser = subparsers.add_parser("storage-umount")
     storage_umount_parser.add_argument("mount_point")
@@ -2618,7 +2687,7 @@ def main() -> int:
         elif args.command == "storage-scan":
             print(_json_output(storage_scan(args.path)))
         elif args.command == "storage-mount":
-            print(_json_output(mount_device(args.device, args.mount_point)))
+            print(_json_output(mount_device(args.device, args.mount_point, args.persist)))
         elif args.command == "storage-umount":
             print(_json_output(umount_device(args.mount_point)))
         elif args.command == "storage-format":
