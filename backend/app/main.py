@@ -124,6 +124,10 @@ class StorageFormatRequest(BaseModel):
     label: str = Field(default="", max_length=16, pattern=r"^[A-Za-z0-9._-]*$")
 
 
+class UpdateActionRequest(BaseModel):
+    action: Literal["apply"] = "apply"
+
+
 def _client_ip(request: Request | WebSocket) -> str:
     return request.client.host if request.client else "unknown"
 
@@ -738,6 +742,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         limit: int = Query(default=100, ge=1, le=200),
     ) -> dict[str, Any]:
         return {"items": database.list_audit(limit)}
+
+    @app.get("/api/update")
+    def update_information(
+        _: Annotated[dict[str, Any], Depends(require_session)],
+        refresh: bool = Query(default=False),
+    ) -> dict[str, Any]:
+        try:
+            return ops.update_status(refresh=refresh)
+        except OpsError as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+    @app.post("/api/update/actions")
+    def update_action(
+        payload: UpdateActionRequest,
+        request: Request,
+        session: Annotated[dict[str, Any], Depends(require_csrf)],
+    ) -> dict[str, Any]:
+        return audited_operation(
+            request=request,
+            session=session,
+            action="system.update",
+            detail="在线更新 AI Tool",
+            operation=ops.update_start,
+        )
 
     @app.websocket("/api/terminal/ws")
     async def terminal_socket(websocket: WebSocket) -> None:

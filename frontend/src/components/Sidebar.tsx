@@ -1,5 +1,6 @@
 import {
   AppWindow,
+  ArrowUpCircle,
   Boxes,
   Gauge,
   HardDrive,
@@ -27,6 +28,7 @@ export type ViewName =
   | 'terminal'
   | 'logs'
   | 'audit'
+  | 'update'
 
 interface SidebarProps {
   activeView: ViewName
@@ -47,6 +49,7 @@ const navigation = [
   { id: 'terminal' as const, label: '终端', icon: TerminalSquare },
   { id: 'logs' as const, label: '日志', icon: ScrollText },
   { id: 'audit' as const, label: '审计', icon: History },
+  { id: 'update' as const, label: '更新', icon: ArrowUpCircle },
 ]
 
 export function Sidebar({ activeView, username, onView, onLogout }: SidebarProps) {

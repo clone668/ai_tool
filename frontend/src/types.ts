@@ -389,3 +389,38 @@ export interface WebInventory {
   nginx_active: boolean
   warnings: string[]
 }
+
+export interface UpdateCommitInfo {
+  ref: string
+  available: boolean
+  commit?: string
+  short?: string
+  time?: string
+  subject?: string
+}
+
+export interface UpdateRunState {
+  running: boolean
+  status?: 'running' | 'success' | 'failed'
+  started_at?: string
+  finished_at?: string
+  from_commit?: string | null
+  to_commit?: string | null
+  message?: string
+}
+
+export interface UpdateStatus {
+  generated_at: string
+  app_dir: string
+  branch: string
+  upstream: string | null
+  current: UpdateCommitInfo
+  remote: UpdateCommitInfo
+  ahead: number
+  behind: number
+  update_available: boolean
+  running: boolean
+  fetch_error: string | null
+  last_run: UpdateRunState | null
+  log_path: string
+}

@@ -682,6 +682,39 @@ class OpsClient:
             return {"ok": True, "message": f"演示模式：{service_id} {action} 已完成"}
         return self._json_command("web-action", service_id, action, timeout=100)
 
+    def update_status(self, refresh: bool = False) -> dict[str, Any]:
+        if self.settings.demo:
+            return {
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "app_dir": "/data/ai-tool",
+                "branch": "main",
+                "upstream": "origin/main",
+                "current": {
+                    "ref": "HEAD",
+                    "available": True,
+                    "commit": "aeb73bc" + "0" * 33,
+                    "short": "aeb73bc",
+                    "time": "2026-08-09 10:05:44 +0800",
+                    "subject": "fix: mount through systemd-mount",
+                },
+                "remote": {"available": False},
+                "ahead": 0,
+                "behind": 0,
+                "update_available": False,
+                "running": False,
+                "fetch_error": None,
+                "last_run": None,
+                "log_path": "/var/log/ai-tool-update.log",
+            }
+        return self._json_command(
+            "update-status", "refresh" if refresh else "cached", timeout=90
+        )
+
+    def update_start(self) -> dict[str, Any]:
+        if self.settings.demo:
+            return {"ok": True, "message": "演示模式：不会执行真实更新"}
+        return self._json_command("update-start", timeout=60)
+
     def web_logs(self, service_id: str, stream: str, lines: int) -> str:
         safe_lines = max(20, min(lines, 1000))
         if self.settings.demo:

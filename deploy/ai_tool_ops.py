@@ -83,6 +83,13 @@ WEB_BACKUP_DIR = Path("/etc/ai-tool/backups/web")
 WEB_AVAILABLE_DIR = Path("/etc/nginx/ai-tool-sites-available")
 WEB_ENABLED_DIR = Path("/etc/nginx/ai-tool-sites-enabled")
 WEB_INCLUDE_PATH = Path("/etc/nginx/conf.d/ai-tool-managed.conf")
+APP_DIR = Path("/data/ai-tool")
+UPDATE_STATE_PATH = Path("/etc/ai-tool/update-state.json")
+UPDATE_LOG_PATH = Path("/var/log/ai-tool-update.log")
+UPDATE_UNIT = "ai-tool-update.service"
+UPDATE_SCRIPT = APP_DIR / "deploy" / "update.sh"
+GIT = "/usr/bin/git"
+SYSTEMD_RUN = "/usr/bin/systemd-run"
 TERMINAL_USER = "ai-tool-shell"
 TERMINAL_CLEANUP_GRACE_SECONDS = 1.0
 NON_WEB_PORTS = {
@@ -2576,6 +2583,154 @@ def read_web_logs(service_id: str, stream: str, lines: int) -> str:
     return result.stdout[-500_000:]
 
 
+def _git(*args: str, timeout: int = 30) -> subprocess.CompletedProcess[str]:
+    return run(
+        [GIT, "-c", f"safe.directory={APP_DIR}", "-C", str(APP_DIR), *args],
+        timeout=timeout,
+    )
+
+
+def _commit_info(ref: str) -> dict[str, Any]:
+    result = _git("log", "-1", "--format=%H%n%h%n%ci%n%s", ref, timeout=15)
+    if result.returncode != 0:
+        return {"ref": ref, "available": False}
+    lines = (result.stdout.splitlines() + ["", "", "", ""])[:4]
+    return {
+        "ref": ref,
+        "available": True,
+        "commit": lines[0],
+        "short": lines[1],
+        "time": lines[2],
+        "subject": lines[3][:120],
+    }
+
+
+def _read_update_state() -> dict[str, Any]:
+    if not UPDATE_STATE_PATH.exists():
+        return {}
+    try:
+        value = json.loads(UPDATE_STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _update_unit_active() -> bool:
+    result = run([SYSTEMCTL, "is-active", UPDATE_UNIT], timeout=10)
+    return result.stdout.strip() in {"active", "activating"}
+
+
+def update_status(refresh: bool) -> dict[str, Any]:
+    if not (APP_DIR / ".git").is_dir():
+        raise OpsFailure(f"部署目录 {APP_DIR} 不是 Git 仓库，无法在线更新")
+    current = _commit_info("HEAD")
+    branch = _git("rev-parse", "--abbrev-ref", "HEAD", timeout=15).stdout.strip()
+    upstream = ""
+    upstream_result = _git("rev-parse", "--abbrev-ref", "@{u}", timeout=15)
+    if upstream_result.returncode == 0:
+        upstream = upstream_result.stdout.strip()
+    fetch_error = ""
+    if refresh:
+        fetch = _git("fetch", "--quiet", "origin", timeout=60)
+        if fetch.returncode != 0:
+            fetch_error = (fetch.stderr or fetch.stdout).strip()[-500:]
+    behind = 0
+    ahead = 0
+    remote: dict[str, Any] = {"available": False}
+    if upstream:
+        counts = _git("rev-list", "--left-right", "--count", f"HEAD...{upstream}", timeout=15)
+        if counts.returncode == 0:
+            fields = counts.stdout.split()
+            if len(fields) == 2 and all(field.isdigit() for field in fields):
+                ahead, behind = int(fields[0]), int(fields[1])
+        remote = _commit_info(upstream)
+    state = _read_update_state()
+    unit_active = _update_unit_active()
+    if state.get("running") and not unit_active:
+        # The transient update unit died without writing a final state
+        # (e.g. unexpected kill). Report it as a failure instead of hanging.
+        state = {
+            **state,
+            "running": False,
+            "status": "failed",
+            "message": "更新进程异常退出，请查看 /var/log/ai-tool-update.log",
+        }
+    running = unit_active
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "app_dir": str(APP_DIR),
+        "branch": branch,
+        "upstream": upstream or None,
+        "current": current,
+        "remote": remote,
+        "ahead": ahead,
+        "behind": behind,
+        "update_available": behind > 0,
+        "running": running,
+        "fetch_error": fetch_error or None,
+        "last_run": state or None,
+        "log_path": str(UPDATE_LOG_PATH),
+    }
+
+
+def update_start() -> dict[str, Any]:
+    if not (APP_DIR / ".git").is_dir():
+        raise OpsFailure(f"部署目录 {APP_DIR} 不是 Git 仓库，无法在线更新")
+    if not UPDATE_SCRIPT.is_file():
+        raise OpsFailure("更新脚本缺失，请先人工升级一次")
+    if _update_unit_active():
+        raise OpsFailure("已有更新任务正在进行")
+    state = _read_update_state()
+    if state.get("running"):
+        raise OpsFailure("已有更新任务正在进行")
+    staged_script = Path("/run/ai-tool-update.sh")
+    shutil.copy2(UPDATE_SCRIPT, staged_script)
+    os.chmod(staged_script, 0o700)
+    UPDATE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    started_at = datetime.now(timezone.utc).isoformat()
+    temporary = UPDATE_STATE_PATH.with_suffix(".tmp")
+    temporary.write_text(
+        json.dumps(
+            {
+                "running": True,
+                "status": "running",
+                "started_at": started_at,
+                "from_commit": _commit_info("HEAD").get("commit"),
+                "log_path": str(UPDATE_LOG_PATH),
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    os.chmod(temporary, 0o644)
+    temporary.replace(UPDATE_STATE_PATH)
+    # Run in a transient systemd unit: a plain detached child stays inside the
+    # ai-tool.service cgroup and would be killed when install.sh restarts the
+    # service at the end of the update.
+    result = run(
+        [
+            SYSTEMD_RUN,
+            "--unit",
+            UPDATE_UNIT.removesuffix(".service"),
+            "--collect",
+            "--description",
+            "AI Tool self update",
+            "/bin/bash",
+            str(staged_script),
+        ],
+        timeout=30,
+    )
+    if result.returncode != 0:
+        UPDATE_STATE_PATH.unlink(missing_ok=True)
+        raise OpsFailure((result.stderr or result.stdout).strip()[-1000:] or "无法启动更新任务")
+    return {
+        "ok": True,
+        "message": "更新任务已启动，服务会在更新完成后自动重启",
+        "started_at": started_at,
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(add_help=False)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -2669,6 +2824,11 @@ def build_parser() -> argparse.ArgumentParser:
     share_action_parser.add_argument(
         "action", choices=["enable", "disable", "delete", "reload"]
     )
+
+    update_status_parser = subparsers.add_parser("update-status")
+    update_status_parser.add_argument("mode", choices=["cached", "refresh"])
+
+    subparsers.add_parser("update-start")
     return parser
 
 
@@ -2738,6 +2898,10 @@ def main() -> int:
             print(_json_output(upsert_share(args.payload)))
         elif args.command == "share-action":
             print(_json_output(perform_share_action(args.share_id, args.action)))
+        elif args.command == "update-status":
+            print(_json_output(update_status(args.mode == "refresh")))
+        elif args.command == "update-start":
+            print(_json_output(update_start()))
         return 0
     except OpsFailure as exc:
         print(str(exc), file=sys.stderr)

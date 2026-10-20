@@ -14,6 +14,7 @@ import { SharesView } from './components/SharesView'
 import { StartupView } from './components/StartupView'
 import { StorageView } from './components/StorageView'
 import { SystemView } from './components/SystemView'
+import { UpdateView } from './components/UpdateView'
 import { WebServicesView } from './components/WebServicesView'
 
 const TerminalView = lazy(() => import('./components/TerminalView').then(
@@ -43,6 +44,7 @@ const viewTitles: Record<ViewName, { title: string; subtitle: string }> = {
   terminal: { title: '命令终端', subtitle: '隔离的低权限会话' },
   logs: { title: '日志中心', subtitle: 'systemd journal 与容器日志' },
   audit: { title: '操作审计', subtitle: '登录与运维动作记录' },
+  update: { title: '系统更新', subtitle: '从 Git 仓库拉取并重新部署' },
 }
 
 export default function App() {
@@ -251,6 +253,12 @@ export default function App() {
             />
           ) : activeView === 'web' ? (
             <WebServicesView
+              csrfToken={session.csrf_token}
+              onError={handleViewError}
+              onSuccess={(message) => showToast(message, 'success')}
+            />
+          ) : activeView === 'update' ? (
+            <UpdateView
               csrfToken={session.csrf_token}
               onError={handleViewError}
               onSuccess={(message) => showToast(message, 'success')}

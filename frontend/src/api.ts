@@ -16,6 +16,7 @@ import type {
   StorageDetails,
   StorageScan,
   SystemDetails,
+  UpdateStatus,
   WebInventory,
   WebService,
 } from './types'
@@ -194,4 +195,12 @@ export const api = {
     request<{ content: string; stream: string; lines: number }>(
       `/api/web-services/${encodeURIComponent(serviceId)}/logs?stream=${stream}&lines=${lines}`,
     ),
+  updateStatus: (refresh = false) =>
+    request<UpdateStatus>(`/api/update${refresh ? '?refresh=true' : ''}`),
+  updateApply: (csrfToken: string) =>
+    request<{ ok: boolean; message: string }>('/api/update/actions', {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': csrfToken },
+      body: JSON.stringify({ action: 'apply' }),
+    }),
 }
