@@ -1544,6 +1544,10 @@ def _render_shares(items: list[dict[str, Any]]) -> str:
         lines.append(f"    guest ok = {'yes' if share['guest_ok'] else 'no'}")
         if share["valid_users"]:
             lines.append(f"    valid users = {' '.join(share['valid_users'])}")
+        if not share["read_only"]:
+            lines.append("    create mask = 0777")
+            lines.append("    directory mask = 0777")
+            lines.append("    force user = root")
         lines.append("")
     return "\n".join(lines) + "\n"
 

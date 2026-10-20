@@ -40,9 +40,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...init?.headers,
     },
   })
-  const body = await response.json().catch(() => null) as { detail?: string } | null
+  const body = await response.json().catch(() => null) as { detail?: unknown } | null
   if (!response.ok) {
-    throw new ApiError(body?.detail ?? `请求失败 (${response.status})`, response.status)
+    const detail = body?.detail
+    const message =
+      typeof detail === 'string' && detail
+        ? detail
+        : detail
+          ? JSON.stringify(detail)
+          : `请求失败 (${response.status})`
+    throw new ApiError(message, response.status)
   }
   return body as T
 }
