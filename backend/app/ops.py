@@ -466,7 +466,7 @@ class OpsClient:
             suffix = "，并写入 fstab" if persist else ""
             return {"ok": True, "message": f"演示模式：{device} 已挂载到 {mount_point}{suffix}"}
         extra = ["--persist"] if persist else []
-        return self._json_command("storage-mount", device, mount_point, *extra, timeout=90)
+        return self._json_command("storage-mount", device, mount_point, *extra, timeout=200)
 
     def storage_umount(self, mount_point: str) -> dict[str, Any]:
         if self.settings.demo:

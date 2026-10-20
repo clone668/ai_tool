@@ -1329,16 +1329,32 @@ def mount_device(device: str, mount_point: str, persist: bool) -> dict[str, Any]
     # leaves FUSE daemons (ntfs-3g) inside the ai-tool.service cgroup, and every
     # service restart would kill the daemon and drop the mount. systemd-mount
     # gives the mount its own unit owned by PID 1, immune to our restarts.
+    # It must run WITHOUT --no-block: the async mode exits 0 before the mount
+    # job finishes, so a failing fsck dependency would be reported as success.
     systemd_mount = shutil.which("systemd-mount")
     if systemd_mount:
-        command = [systemd_mount, "--no-block", device, mount_point]
+        command = [systemd_mount, device, mount_point]
     else:
         command = [MOUNT, "--source", device, "--target", mount_point]
-    result = run(command, timeout=60)
-    if result.returncode != 0:
+    try:
+        result = run(command, timeout=180)
+    except OpsFailure as exc:
         if persist:
             _fstab_remove(mount_point)
-        raise OpsFailure((result.stderr or result.stdout).strip()[-1000:] or "挂载失败")
+        raise OpsFailure(f"挂载超时或未完成：{exc}") from exc
+    if result.returncode != 0 or (
+        systemd_mount
+        and run(
+            [FINDMNT, "-n", "--mountpoint", mount_point], timeout=15
+        ).returncode != 0
+    ):
+        if persist:
+            _fstab_remove(mount_point)
+        detail = (result.stderr or result.stdout).strip()[-1000:]
+        hint = ""
+        if partition["fstype"] in {"ext4", "xfs"}:
+            hint = f"；文件系统可能需要检查：sudo fsck -y {device}"
+        raise OpsFailure((detail or "挂载失败") + hint)
     message = f"{device} 已挂载到 {mount_point}"
     if persist:
         message += "，并写入 fstab 开机自动挂载"
